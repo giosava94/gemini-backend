@@ -1,0 +1,1 @@
+docker compose -f compose.neo4j.dev.yml -f docker-compose.yml up

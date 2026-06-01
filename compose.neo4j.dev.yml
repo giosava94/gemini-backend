@@ -10,12 +10,12 @@ services:
       - test-db-logs:/logs
     environment:
       - NEO4J_AUTH=none
-    # healthcheck:
-    #   test: wget http://localhost:7474 || exit 1
-    #   start_period: 30s
-    #   interval: 5s
-    #   timeout: 5s
-    #   retries: 15
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:7474"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
     restart: unless-stopped
 
 volumes:

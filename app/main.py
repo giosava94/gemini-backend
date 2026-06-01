@@ -25,13 +25,14 @@ async def lifespan(app: FastAPI):
     if not logger.handlers:
         logger.addHandler(handler)
     app.logger = logger  # pyright: ignore[reportAttributeAccessIssue]
-    logger.info("Application startup complete")
+    logger.info("Application starting up...")
 
     # Initialize database driver
     driver = create_driver()
     ensure_constraints(driver)
     app.driver = driver  # pyright: ignore[reportAttributeAccessIssue]
 
+    logger.info("Application startup complete")
     yield
 
     # Shutdown
