@@ -1,0 +1,35 @@
+repos:
+  # Ruff: Format and linting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        name: Ruff lint
+        args: [--fix]
+      - id: ruff-format
+        name: Ruff format
+
+  # YAML formatting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-yaml
+        name: Check YAML
+
+  # Poetry lock export to requirements.txt
+  - repo: local
+    hooks:
+      - id: poetry-lock-export-dev
+        name: Export poetry.lock to requirements.txt
+        entry: bash -c 'command -v poetry > /dev/null 2>&1 && poetry export -f requirements.txt --output requirements.dev.txt --with dev --without-hashes || true'
+        language: system
+        files: ^(pyproject\.toml|poetry\.lock)$
+        pass_filenames: false
+        stages: [commit]
+      - id: poetry-lock-export-prod
+        name: Export poetry.lock to requirements.txt
+        entry: bash -c 'command -v poetry > /dev/null 2>&1 && poetry export -f requirements.txt --output requirements.txt --without-hashes || true'
+        language: system
+        files: ^(pyproject\.toml|poetry\.lock)$
+        pass_filenames: false
+        stages: [commit]

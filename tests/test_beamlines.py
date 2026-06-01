@@ -9,7 +9,10 @@ def test_create_and_get_list_and_detail_and_delete():
     # ensure empty
     _beam_lines.clear()
 
-    headers = {"Authorization": "Bearer admin-token", "Content-type": "application/json"}
+    headers = {
+        "Authorization": "Bearer admin-token",
+        "Content-type": "application/json",
+    }
     # create
     r = client.post(
         "/api/v1/beam-lines",
@@ -35,7 +38,9 @@ def test_create_and_get_list_and_detail_and_delete():
 
     # patch
     r = client.patch(
-        f"/api/v1/beam-lines/{created_id}", json={"Name": "Line A Renamed"}, headers=headers
+        f"/api/v1/beam-lines/{created_id}",
+        json={"Name": "Line A Renamed"},
+        headers=headers,
     )
     assert r.status_code == 204
 

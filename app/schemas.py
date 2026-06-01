@@ -28,9 +28,7 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 class BeamLineCreate(BaseModel):
     """Request model for creating a new beam line."""
 
-    name: Annotated[
-        NonEmptyStr, Field(..., description="Unique beam line name")
-    ]
+    name: Annotated[NonEmptyStr, Field(..., description="Unique beam line name")]
     description: Annotated[
         str | None,
         Field(None, description="Optional beam line description"),
@@ -53,9 +51,7 @@ class BeamLineUpdate(BaseModel):
 class BeamLineData(BaseModel):
     """Beam line data model."""
 
-    id: Annotated[
-        int, Field(..., description="Auto-generated unique beam line ID")
-    ]
+    id: Annotated[int, Field(..., description="Auto-generated unique beam line ID")]
     name: Annotated[str, Field(..., description="Beam line name")]
     description: Annotated[
         str | None,
@@ -69,7 +65,7 @@ class LinksModel(BaseModel):
     line_items: Annotated[
         str,
         Field(
-            ..., 
+            ...,
             description="URL pointing to related line item resources",
         ),
     ]
@@ -78,12 +74,8 @@ class LinksModel(BaseModel):
 class BeamLineDetailResponse(BaseModel):
     """Response model for retrieving a specific beam line with links."""
 
-    links: Annotated[
-        LinksModel, Field(..., description="Related resource links")
-    ]
-    data: Annotated[
-        BeamLineData, Field(..., description="Beam line details")
-    ]
+    links: Annotated[LinksModel, Field(..., description="Related resource links")]
+    data: Annotated[BeamLineData, Field(..., description="Beam line details")]
 
 
 class BeamLineListResponse(BaseModel):
@@ -91,9 +83,7 @@ class BeamLineListResponse(BaseModel):
 
     page: Annotated[int, Field(..., description="Current page number")]
     per_page: Annotated[int, Field(..., description="Items per page")]
-    total: Annotated[
-        int, Field(..., description="Total number of items")
-    ]
+    total: Annotated[int, Field(..., description="Total number of items")]
     data: Annotated[
         list[BeamLineData],
         Field(..., description="List of beam line items"),

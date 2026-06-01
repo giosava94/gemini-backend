@@ -55,7 +55,9 @@ def list_beam_lines(
     logger: logging.Logger = Depends(get_logger),
 ):
     """List beam lines with pagination and filtering."""
-    logger.info(f"Listing beam lines - page: {page}, per_page: {per_page}, name filter: {name}")
+    logger.info(
+        f"Listing beam lines - page: {page}, per_page: {per_page}, name filter: {name}"
+    )
     if sort:
         for key in sort:
             if key != "name":

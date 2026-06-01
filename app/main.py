@@ -13,7 +13,7 @@ async def lifespan(app: FastAPI):
     """Manage application lifespan: startup and shutdown."""
     # Startup
     settings = get_settings()
-    
+
     # Initialize logger
     logger = logging.getLogger("gemini_backend")
     logger.setLevel(settings.log_level.upper())
@@ -24,16 +24,16 @@ async def lifespan(app: FastAPI):
     handler.setFormatter(formatter)
     if not logger.handlers:
         logger.addHandler(handler)
-    app.logger = logger # pyright: ignore[reportAttributeAccessIssue]
+    app.logger = logger  # pyright: ignore[reportAttributeAccessIssue]
     logger.info("Application startup complete")
-    
+
     # Initialize database driver
     driver = create_driver()
     ensure_constraints(driver)
-    app.driver = driver # pyright: ignore[reportAttributeAccessIssue]
-    
+    app.driver = driver  # pyright: ignore[reportAttributeAccessIssue]
+
     yield
-    
+
     # Shutdown
     logger.info("Application shutting down")
     close_driver(driver)

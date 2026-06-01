@@ -39,11 +39,15 @@ def ensure_constraints(driver: Driver) -> None:
 
 def run_query(driver: Driver, query: str, parameters: dict | None = None) -> list:
     """Execute a Neo4j query and return results."""
-    logger.debug(f"Executing query: {query[:100]}..." if len(query) > 100 else f"Executing query: {query}")
+    logger.debug(
+        f"Executing query: {query[:100]}..."
+        if len(query) > 100
+        else f"Executing query: {query}"
+    )
     if parameters:
         logger.debug(f"Query parameters: {parameters}")
     with driver.session() as session:
-        result = session.run(query, parameters or {}) # pyright: ignore[reportArgumentType]
+        result = session.run(query, parameters or {})  # pyright: ignore[reportArgumentType]
         records = [record for record in result]
     logger.debug(f"Query returned {len(records)} record(s)")
     return records
@@ -58,14 +62,21 @@ def find_by_id(driver: Driver, item_id: int) -> dict | None:
         logger.warning(f"Beam line not found with ID: {item_id}")
         return None
     node = records[0]["b"]
-    result = {"id": node["id"], "name": node["name"], "description": node.get("description")}
+    result = {
+        "id": node["id"],
+        "name": node["name"],
+        "description": node.get("description"),
+    }
     logger.debug(f"Found beam line: {result}")
     return result
 
 
 def exists_name(driver: Driver, name: str, exclude_id: int | None = None) -> bool:
     """Check if a beam line name exists (case-insensitive)."""
-    logger.debug(f"Checking if beam line name exists: {name}" + (f" (excluding ID: {exclude_id})" if exclude_id else ""))
+    logger.debug(
+        f"Checking if beam line name exists: {name}"
+        + (f" (excluding ID: {exclude_id})" if exclude_id else "")
+    )
     query = (
         "MATCH (b:BeamLine) "
         "WHERE toLower(b.name) = toLower($name) "

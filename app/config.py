@@ -15,7 +15,9 @@ class Settings(BaseSettings):
     neo4j_password: Annotated[str, Field(description="Neo4j database password")] = (
         "password"
     )
-    log_level: Annotated[str, Field(description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")] = "INFO"
+    log_level: Annotated[
+        str, Field(description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
+    ] = "INFO"
 
     class Config:
         env_file = ".env"
