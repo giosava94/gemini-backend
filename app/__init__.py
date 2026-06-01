@@ -1,1 +1,1 @@
-__all__ = ["main", "schemas"]
+__all__ = ["main", "schemas", "config"]

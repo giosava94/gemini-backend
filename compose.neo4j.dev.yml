@@ -1,0 +1,23 @@
+services:
+  db:
+    image: neo4j:2026
+    container_name: neo4j-test-db
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    volumes:
+      - test-db-data:/data
+      - test-db-logs:/logs
+    environment:
+      - NEO4J_AUTH=none
+    # healthcheck:
+    #   test: wget http://localhost:7474 || exit 1
+    #   start_period: 30s
+    #   interval: 5s
+    #   timeout: 5s
+    #   retries: 15
+    restart: unless-stopped
+
+volumes:
+  test-db-data:
+  test-db-logs:
