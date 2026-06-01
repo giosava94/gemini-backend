@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from neo4j import Driver
 from typing import Annotated
+import logging
 from app.db import run_query, find_by_id, exists_name
 from app.schemas import (
     BeamLineCreate,
@@ -9,7 +10,7 @@ from app.schemas import (
     BeamLineListResponse,
     BeamLineUpdate,
 )
-from app.dependencies import get_driver
+from app.dependencies import get_driver, get_logger
 
 router = APIRouter(prefix="/api/v1/beam-lines", tags=["beam-lines"])
 
@@ -18,9 +19,11 @@ router = APIRouter(prefix="/api/v1/beam-lines", tags=["beam-lines"])
 def create_beam_line(
     payload: BeamLineCreate,
     driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
     # token: str = Depends(require_admin),
 ):
     """Create a new beam line."""
+    logger.info(f"Creating beam line with name: {payload.name}")
     name = payload.name
     if exists_name(driver, name):
         raise HTTPException(
@@ -49,8 +52,10 @@ def list_beam_lines(
     sort: Annotated[list[str] | None, Query(...)] = None,
     name: Annotated[str | None, Query(...)] = None,
     driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
 ):
     """List beam lines with pagination and filtering."""
+    logger.info(f"Listing beam lines - page: {page}, per_page: {per_page}, name filter: {name}")
     if sort:
         for key in sort:
             if key != "name":
@@ -79,8 +84,13 @@ def list_beam_lines(
 
 
 @router.get("/{beam_id}", response_model=BeamLineDetailResponse)
-def get_beam_line(beam_id: int, driver: Driver = Depends(get_driver)):
+def get_beam_line(
+    beam_id: int,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+):
     """Retrieve a specific beam line."""
+    logger.info(f"Fetching beam line with ID: {beam_id}")
     item = find_by_id(driver, beam_id)
     if not item:
         raise HTTPException(status_code=404, detail="Target item does not exist")
@@ -98,9 +108,11 @@ def delete_beam_line(
     beam_id: int,
     force: Annotated[bool, Query(...)] = False,
     driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
     # token: Annotated[str, Depends(require_admin)] = Depends(require_admin),
 ):
     """Delete a beam line."""
+    logger.info(f"Deleting beam line with ID: {beam_id}, force: {force}")
     query = (
         "MATCH (b:BeamLine {id: $id}) "
         "OPTIONAL MATCH (b)-[r:HAS_LINE_ITEM]->(:LineItem) "
@@ -124,9 +136,11 @@ def patch_beam_line(
     beam_id: int,
     payload: BeamLineUpdate,
     driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
     # token: Annotated[str, Depends(require_admin)] = Depends(require_admin),
 ):
     """Update a beam line."""
+    logger.info(f"Updating beam line with ID: {beam_id}")
     if payload.name and exists_name(driver, payload.name, exclude_id=beam_id):
         raise HTTPException(
             status_code=409, detail="An item with the same name already exists"

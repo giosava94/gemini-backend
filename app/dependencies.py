@@ -1,6 +1,7 @@
 from fastapi import Depends, Header, HTTPException, Request
 from neo4j import Driver
 from typing import Annotated
+import logging
 
 
 def get_driver_from_state(request: Request) -> Driver:
@@ -33,3 +34,10 @@ def require_admin(token: str | None = Depends(get_current_token)):
     if token != "admin-token":
         raise HTTPException(status_code=403, detail="Not authorized")
     return token
+
+
+def get_logger(request: Request) -> logging.Logger:
+    """Retrieve the application logger from app state."""
+    if not hasattr(request.app, "logger"):
+        raise RuntimeError("Logger is not initialized")
+    return request.app.logger
