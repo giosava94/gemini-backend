@@ -54,9 +54,21 @@ app.include_router(line_item_router)
 )
 def get_health(request: Request):
     """Inspect the service's health status and return a HealthResponse."""
-    resp = HealthResponse(
-        status=StatusEnum.HEALTHY,
-        details={"message": "Service is running"},
-        timestamp=datetime.now(timezone.utc),
-    )
+    try:
+        driver = request.app.driver
+        driver.verify_connectivity()
+        resp = HealthResponse(
+            status=StatusEnum.HEALTHY,
+            details={"message": "Service is running"},
+            timestamp=datetime.now(timezone.utc),
+        )
+    except Exception as error:
+        resp = HealthResponse(
+            status=StatusEnum.NOT_HEALTHY,
+            details={
+                "message": "Connection with the database is down",
+                "error": str(error),
+            },
+            timestamp=datetime.now(timezone.utc),
+        )
     return resp
