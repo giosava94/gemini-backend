@@ -163,6 +163,39 @@ class LineItemAdjacentsDelete(BaseModel):
     ]
 
 
+class LineItemAdjacentPatch(BaseModel):
+    """Request model for updating an adjacent line item's position and index."""
+
+    position: Annotated[
+        AdjacentPosition,
+        Field(
+            ...,
+            description="New position of the linked item relative to the current one",
+        ),
+    ]
+    index: Annotated[
+        int | None,
+        Field(
+            None,
+            description="Ordering index for multiple adjacent items at the same position",
+        ),
+    ] = None
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def validate_position(cls, value: str | AdjacentPosition) -> AdjacentPosition:
+        if isinstance(value, AdjacentPosition):
+            return value
+        if not isinstance(value, str):
+            allowed = ", ".join(item.value for item in AdjacentPosition)
+            raise ValueError(f"position must be one of: {allowed}")
+        normalized = ADJ_POS_LOOKUP.get(value.lower())
+        if normalized is None:
+            allowed = ", ".join(item.value for item in AdjacentPosition)
+            raise ValueError(f"position must be one of: {allowed}")
+        return normalized
+
+
 class LineItemAdjacentsUpdate(BaseModel):
     """Request model for adding adjacent line items."""
 

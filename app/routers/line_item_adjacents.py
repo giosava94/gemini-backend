@@ -9,6 +9,7 @@ from app.schemas import (
     AdjacentPosition,
     LineItemAdjacent,
     LineItemAdjacentData,
+    LineItemAdjacentPatch,
     LineItemAdjacentsDelete,
     LineItemAdjacentsListResponse,
     LineItemAdjacentsUpdate,
@@ -286,5 +287,97 @@ def delete_line_item_adjacents(
             "FOREACH (_ IN CASE WHEN r2 IS NOT NULL THEN [1] ELSE [] END | DELETE r2)"
         ),
         {"beam_id": beam_id, "id": item_id, "target_ids": payload.items},
+    )
+    return None
+
+
+@router.patch("/{item_id}/adjacents/{adj_id}", status_code=204)
+def patch_line_item_adjacent(
+    beam_id: int,
+    item_id: int,
+    adj_id: int,
+    payload: LineItemAdjacentPatch,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # _token: str = Depends(require_admin),
+):
+    """Change the position (and optionally the index) of a specific adjacent item."""
+    logger.info(
+        f"Patching adjacent {adj_id} of line item {item_id} on beam line {beam_id}: "
+        f"position={payload.position.value}, index={payload.index}"
+    )
+
+    # Verify beam line, current item, and target adjacent item all exist
+    existence_records = run_query(
+        driver,
+        (
+            "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+            "(current:LineItem {id: $id})-[:PREVIOUS|NEXT]->(adj:LineItem {id: $adj_id}) "
+            "RETURN current.id AS current_id, adj.id AS adj_id"
+        ),
+        {"beam_id": beam_id, "id": item_id, "adj_id": adj_id},
+    )
+    if not existence_records:
+        raise HTTPException(
+            status_code=404,
+            detail="Beam line, current item or target linked item do not exist",
+        )
+
+    # Check index conflict: another adjacent at the same new position already holds this index
+    if payload.index is not None:
+        conflict_records = run_query(
+            driver,
+            (
+                "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+                "(current:LineItem {id: $id})-[rel:PREVIOUS|NEXT]->(other:LineItem) "
+                "WHERE other.id <> $adj_id "
+                "AND (($position IN ['Previous', 'Dual'] AND type(rel) = 'PREVIOUS') "
+                "     OR ($position IN ['Next', 'Dual'] AND type(rel) = 'NEXT')) "
+                "AND rel.index = $index "
+                "RETURN count(rel) > 0 AS has_conflict"
+            ),
+            {
+                "beam_id": beam_id,
+                "id": item_id,
+                "adj_id": adj_id,
+                "position": payload.position.value,
+                "index": payload.index,
+            },
+        )
+        if conflict_records and conflict_records[0]["has_conflict"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Adjacent item with the same index already exists",
+            )
+
+    # Delete existing relationships between current and adj in both directions,
+    # then recreate according to the new position.
+    run_query(
+        driver,
+        (
+            "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+            "(current:LineItem {id: $id}), "
+            "(adj:LineItem {id: $adj_id}) "
+            "OPTIONAL MATCH (current)-[r1:PREVIOUS|NEXT]->(adj) "
+            "OPTIONAL MATCH (adj)-[r2:PREVIOUS|NEXT]->(current) "
+            "FOREACH (_ IN CASE WHEN r1 IS NOT NULL THEN [1] ELSE [] END | DELETE r1) "
+            "FOREACH (_ IN CASE WHEN r2 IS NOT NULL THEN [1] ELSE [] END | DELETE r2) "
+            "WITH current, adj "
+            "FOREACH (_ IN CASE WHEN $position IN ['Previous', 'Dual'] THEN [1] ELSE [] END | "
+            "  CREATE (current)-[:PREVIOUS {index: $index}]->(adj) "
+            "  CREATE (adj)-[:NEXT {index: $index}]->(current) "
+            ") "
+            "FOREACH (_ IN CASE WHEN $position IN ['Next', 'Dual'] THEN [1] ELSE [] END | "
+            "  CREATE (current)-[:NEXT {index: $index}]->(adj) "
+            "  CREATE (adj)-[:PREVIOUS {index: $index}]->(current) "
+            ")"
+        ),
+        {
+            "beam_id": beam_id,
+            "id": item_id,
+            "adj_id": adj_id,
+            "position": payload.position.value,
+            "index": payload.index,
+        },
     )
     return None
