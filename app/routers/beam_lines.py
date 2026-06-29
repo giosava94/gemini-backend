@@ -105,34 +105,6 @@ def get_beam_line(
     return {"links": links, "data": data}
 
 
-@router.delete("/{beam_id}", status_code=204)
-def delete_beam_line(
-    beam_id: int,
-    force: Annotated[bool, Query(...)] = False,
-    driver: Driver = Depends(get_driver),
-    logger: logging.Logger = Depends(get_logger),
-    # token: Annotated[str, Depends(require_admin)] = Depends(require_admin),
-):
-    """Delete a beam line."""
-    logger.info(f"Deleting beam line with ID: {beam_id}, force: {force}")
-    query = (
-        "MATCH (b:BeamLine {id: $id}) "
-        "OPTIONAL MATCH (b)-[r:HAS_LINE_ITEM]->(:LineItem) "
-        "RETURN count(r) AS linked_count"
-    )
-    records = run_query(driver, query, {"id": beam_id})
-    if not records:
-        raise HTTPException(status_code=404, detail="Target item does not exist")
-    linked_count = records[0]["linked_count"]
-    if linked_count and not force:
-        raise HTTPException(
-            status_code=409,
-            detail="Can't delete an item with line items; set force to true to override",
-        )
-    run_query(driver, "MATCH (b:BeamLine {id: $id}) DETACH DELETE b", {"id": beam_id})
-    return None
-
-
 @router.patch("/{beam_id}", status_code=204)
 def patch_beam_line(
     beam_id: int,
@@ -161,4 +133,32 @@ def patch_beam_line(
     records = run_query(driver, query, parameters)
     if not records:
         raise HTTPException(status_code=404, detail="Target item does not exist")
+    return None
+
+
+@router.delete("/{beam_id}", status_code=204)
+def delete_beam_line(
+    beam_id: int,
+    force: Annotated[bool, Query(...)] = False,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # token: Annotated[str, Depends(require_admin)] = Depends(require_admin),
+):
+    """Delete a beam line."""
+    logger.info(f"Deleting beam line with ID: {beam_id}, force: {force}")
+    query = (
+        "MATCH (b:BeamLine {id: $id}) "
+        "OPTIONAL MATCH (b)-[r:HAS_LINE_ITEM]->(:LineItem) "
+        "RETURN count(r) AS linked_count"
+    )
+    records = run_query(driver, query, {"id": beam_id})
+    if not records:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
+    linked_count = records[0]["linked_count"]
+    if linked_count and not force:
+        raise HTTPException(
+            status_code=409,
+            detail="Can't delete an item with line items; set force to true to override",
+        )
+    run_query(driver, "MATCH (b:BeamLine {id: $id}) DETACH DELETE b", {"id": beam_id})
     return None

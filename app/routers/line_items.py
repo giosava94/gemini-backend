@@ -13,6 +13,7 @@ from app.schemas import (
     LineItemDetailResponse,
     LineItemListResponse,
     LineItemStatus,
+    LineItemUpdate,
 )
 
 router = APIRouter(
@@ -272,6 +273,53 @@ def get_line_item(
         status=item["status"],
     )
     return {"links": links, "data": data}
+
+
+@router.patch("/{item_id}", status_code=204)
+def patch_line_item(
+    beam_id: int,
+    item_id: int,
+    payload: LineItemUpdate,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # _token: str = Depends(require_admin),
+):
+    """Update a specific line item under a beam line."""
+    logger.info(f"Updating line item with ID: {item_id} for beam line {beam_id}")
+    if payload.name and exists_any_name(driver, payload.name, exclude_id=item_id):
+        raise HTTPException(
+            status_code=409,
+            detail="An item with the same name already exists",
+        )
+
+    update_clauses: list[str] = []
+    parameters: dict[str, object] = {"beam_id": beam_id, "id": item_id}
+    if payload.name is not None:
+        update_clauses.append("li.name = $name")
+        parameters["name"] = payload.name
+    if payload.description is not None:
+        update_clauses.append("li.description = $description")
+        parameters["description"] = payload.description
+    if payload.status is not None:
+        update_clauses.append("li.status = $status")
+        parameters["status"] = payload.status.value
+
+    if not update_clauses:
+        return None
+
+    query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(li:LineItem {id: $id}) "
+        f"SET {', '.join(update_clauses)} "
+        "RETURN li.id AS id"
+    )
+    records = run_query(driver, query, parameters)
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail="Beam line or target item does not exist",
+        )
+    return None
 
 
 @router.delete("/{item_id}", status_code=204)

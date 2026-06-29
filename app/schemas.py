@@ -194,6 +194,23 @@ class LineItemCreate(BaseModel):
         return normalized
 
 
+class LineItemUpdate(BaseModel):
+    """Request model for updating a line item."""
+
+    name: Annotated[
+        NonEmptyStr | None,
+        Field(None, description="Updated line item name"),
+    ] = None
+    description: Annotated[
+        str | None,
+        Field(None, description="Updated line item description"),
+    ] = None
+    status: Annotated[
+        LineItemStatus | None,
+        Field(None, description="Updated line item status"),
+    ] = None
+
+
 class LineItemCreateResponse(BaseModel):
     """Response model for creating a new line item."""
 
