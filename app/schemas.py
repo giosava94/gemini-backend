@@ -154,6 +154,15 @@ class LineItemAdjacent(BaseModel):
         return normalized
 
 
+class LineItemAdjacentsUpdate(BaseModel):
+    """Request model for adding adjacent line items."""
+
+    items: Annotated[
+        list[LineItemAdjacent],
+        Field(..., min_length=1, description="Line items to connect as adjacents"),
+    ]
+
+
 class LineItemCreate(BaseModel):
     """Request model for creating a new line item."""
 

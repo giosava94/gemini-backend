@@ -6,6 +6,8 @@ from app.db import exists_any_name, run_query
 from app.dependencies import get_driver, get_logger
 from app.schemas import (
     LINE_ITEM_KIND_LOOKUP,
+    LineItemAdjacent,
+    LineItemAdjacentsUpdate,
     LineItemCreate,
     LineItemCreateResponse,
     LineItemData,
@@ -37,11 +39,25 @@ def _line_item_ids_exist(driver: Driver, ids: list[int]) -> bool:
 
 
 def _has_duplicate_adjacent_index(payload: LineItemCreate) -> bool:
+    return _has_duplicate_adjacent_index_in_items(payload.adjacents)
+
+
+def _has_duplicate_adjacent_items(items: list[LineItemAdjacent]) -> bool:
+    seen: set[tuple[int, str]] = set()
+    for adjacent in items:
+        key = (adjacent.id, adjacent.position.value)
+        if key in seen:
+            return True
+        seen.add(key)
+    return False
+
+
+def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> bool:
     seen: set[tuple[str, int]] = set()
-    for adjacent in payload.adjacents:
+    for adjacent in items:
         if adjacent.index is None:
             continue
-        key = (adjacent.position, adjacent.index)
+        key = (adjacent.position.value, adjacent.index)
         if key in seen:
             return True
         seen.add(key)
@@ -273,6 +289,104 @@ def get_line_item(
         status=item["status"],
     )
     return {"links": links, "data": data}
+
+
+@router.put("/{item_id}/adjacents", status_code=201)
+def put_line_item_adjacents(
+    beam_id: int,
+    item_id: int,
+    payload: LineItemAdjacentsUpdate,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # _token: str = Depends(require_admin),
+):
+    """Add one or multiple adjacent line items to the current one."""
+    logger.info(f"Adding adjacents to line item {item_id} for beam line {beam_id}")
+    if _has_duplicate_adjacent_items(payload.items) or (
+        _has_duplicate_adjacent_index_in_items(payload.items)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Duplicated items in the list or adjacent item with the same "
+                "index already exist"
+            ),
+        )
+
+    target_ids = [item.id for item in payload.items]
+    query = (
+        "MATCH (beam:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(current:LineItem {id: $id}) "
+        "WITH beam, current "
+        "MATCH (beam)-[:HAS_LINE_ITEM]->(target:LineItem) "
+        "WHERE target.id IN $target_ids "
+        "RETURN count(DISTINCT target.id) = size($target_ids) AS all_targets_exist"
+    )
+    records = run_query(
+        driver,
+        query,
+        {"beam_id": beam_id, "id": item_id, "target_ids": list(set(target_ids))},
+    )
+    if not records or not records[0]["all_targets_exist"]:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Beam line, current item or at least one of the linked items "
+                "do not exist"
+            ),
+        )
+
+    adjacents = [
+        {
+            "id": item.id,
+            "position": item.position.value,
+            "index": item.index,
+        }
+        for item in payload.items
+    ]
+    conflict_query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(current:LineItem {id: $id}) "
+        "UNWIND $adjacents AS adjacent "
+        "WITH current, adjacent "
+        "WHERE adjacent.index IS NOT NULL "
+        "OPTIONAL MATCH (current)-[rel]->(existing:LineItem) "
+        "WHERE type(rel) = 'ADJACENT_TO' "
+        "AND rel.position = adjacent.position "
+        "AND rel.index = adjacent.index "
+        "AND existing.id <> adjacent.id "
+        "RETURN count(rel) > 0 AS has_conflict"
+    )
+    conflict_records = run_query(
+        driver,
+        conflict_query,
+        {"beam_id": beam_id, "id": item_id, "adjacents": adjacents},
+    )
+    if conflict_records and conflict_records[0]["has_conflict"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Duplicated items in the list or adjacent item with the same "
+                "index already exist"
+            ),
+        )
+
+    create_query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(current:LineItem {id: $id}) "
+        "UNWIND $adjacents AS adjacent "
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(target:LineItem {id: adjacent.id}) "
+        "MERGE (current)-[rel:ADJACENT_TO {position: adjacent.position}]->(target) "
+        "ON CREATE SET rel.index = adjacent.index "
+        "RETURN count(rel) AS linked_count"
+    )
+    run_query(
+        driver,
+        create_query,
+        {"beam_id": beam_id, "id": item_id, "adjacents": adjacents},
+    )
+    return None
 
 
 @router.patch("/{item_id}", status_code=204)
