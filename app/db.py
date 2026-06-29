@@ -33,6 +33,8 @@ def ensure_constraints(driver: Driver) -> None:
         "FOR (n:BeamLine) REQUIRE n.name IS UNIQUE",
         "CREATE CONSTRAINT lineitem_name_unique IF NOT EXISTS "
         "FOR (n:LineItem) REQUIRE n.name IS UNIQUE",
+        "CREATE CONSTRAINT item_name_unique IF NOT EXISTS "
+        "FOR (n:Item) REQUIRE n.name IS UNIQUE",
     )
     with driver.session() as session:
         for query in queries:
@@ -93,14 +95,14 @@ def exists_name(driver: Driver, name: str, exclude_id: int | None = None) -> boo
 
 
 def exists_any_name(driver: Driver, name: str, exclude_id: int | None = None) -> bool:
-    """Check whether a beam line or line item name exists."""
+    """Check whether a beam line, line item, or item name exists."""
     logger.debug(
         f"Checking if item name exists: {name}"
         + (f" (excluding ID: {exclude_id})" if exclude_id else "")
     )
     query = (
         "MATCH (n) "
-        "WHERE (n:BeamLine OR n:LineItem) "
+        "WHERE (n:BeamLine OR n:LineItem OR n:Item) "
         "AND toLower(n.name) = toLower($name) "
         "AND ($exclude_id IS NULL OR n.id <> $exclude_id) "
         "RETURN count(n) > 0 AS exists"

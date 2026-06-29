@@ -1,0 +1,266 @@
+from fastapi import APIRouter, Depends, HTTPException, Query
+from neo4j import Driver
+from typing import Annotated
+import logging
+from app.db import exists_any_name, run_query
+from app.dependencies import get_driver, get_logger
+from app.schemas import (
+    ItemCreate,
+    ItemCreateResponse,
+    ItemData,
+    ItemDetailData,
+    ItemDetailResponse,
+    ItemListResponse,
+    ItemUpdate,
+)
+
+router = APIRouter(
+    prefix="/api/v1/items",
+    tags=["items"],
+)
+
+
+def _ids_exist(driver: Driver, ids: list[int]) -> bool:
+    """Return whether every ID belongs to an existing Item or LineItem node."""
+    distinct_ids = list(set(ids))
+    if not distinct_ids:
+        return True
+    query = (
+        "UNWIND $ids AS id "
+        "OPTIONAL MATCH (n) WHERE (n:Item OR n:LineItem) AND n.id = id "
+        "RETURN count(n) = size($ids) AS all_exist"
+    )
+    records = run_query(driver, query, {"ids": distinct_ids})
+    return bool(records and records[0]["all_exist"])
+
+
+@router.post("", status_code=201, response_model=ItemCreateResponse)
+def create_item(
+    payload: ItemCreate,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # _token: str = Depends(require_admin),
+):
+    """Create a new non-line item."""
+    logger.info(f"Creating item with name: {payload.name}")
+
+    if exists_any_name(driver, payload.name):
+        raise HTTPException(
+            status_code=409, detail="Item with this name already exists"
+        )
+
+    if payload.connections and not _ids_exist(driver, payload.connections):
+        raise HTTPException(
+            status_code=404,
+            detail="At least one item that should be connected does not exist",
+        )
+
+    query = (
+        "MERGE (c:Counter {name: 'item'}) "
+        "ON CREATE SET c.value = 0 "
+        "SET c.value = c.value + 1 "
+        "WITH c.value AS nextId "
+        "CREATE (i:Item {"
+        "id: nextId, name: $name, description: $description, "
+        "kind: $kind, status: $status"
+        "}) "
+        "WITH i "
+        "CALL (i) { "
+        "UNWIND $connections AS connected_id "
+        "MATCH (target) WHERE (target:Item OR target:LineItem) AND target.id = connected_id "
+        "CREATE (i)-[:CONNECTED_TO]->(target) "
+        "RETURN count(*) AS connection_count "
+        "} "
+        "RETURN i.id AS id"
+    )
+    records = run_query(
+        driver,
+        query,
+        {
+            "name": payload.name,
+            "description": payload.description,
+            "kind": payload.kind.value,
+            "status": payload.status.value,
+            "connections": list(set(payload.connections)),
+        },
+    )
+    if not records:
+        raise HTTPException(status_code=500, detail="Failed to create item")
+    return {"id": records[0]["id"]}
+
+
+@router.get("", response_model=ItemListResponse)
+def list_items(
+    page: Annotated[int, Query(..., ge=1)] = 1,
+    per_page: Annotated[int, Query(..., ge=1, le=100)] = 10,
+    sort: Annotated[list[str] | None, Query(...)] = None,
+    name: Annotated[str | None, Query(...)] = None,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+):
+    """List non-line items with pagination and optional filtering."""
+    logger.info(
+        f"Listing items - page: {page}, per_page: {per_page}, "
+        f"sort: {sort}, name filter: {name}"
+    )
+
+    if sort:
+        for key in sort:
+            if key not in ("name", "kind"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid sort key: {key}. Valid values: name, kind",
+                )
+
+    where_clause = "WHERE ($name IS NULL OR toLower(i.name) CONTAINS toLower($name)) "
+    parameters: dict = {"name": name}
+
+    count_query = f"MATCH (i:Item) {where_clause} RETURN count(i) AS total"
+    total_records = run_query(driver, count_query, parameters)
+    total = total_records[0]["total"] if total_records else 0
+
+    sort_clauses = []
+    if sort:
+        for key in sort:
+            if key == "name":
+                sort_clauses.append("toLower(i.name)")
+            elif key == "kind":
+                sort_clauses.append("i.kind")
+    order_clause = f"ORDER BY {', '.join(sort_clauses)}" if sort_clauses else ""
+
+    skip = (page - 1) * per_page
+    data_query = (
+        f"MATCH (i:Item) {where_clause} "
+        f"RETURN i {order_clause} SKIP $skip LIMIT $limit"
+    )
+    records = run_query(
+        driver,
+        data_query,
+        {**parameters, "skip": skip, "limit": per_page},
+    )
+    data = [
+        ItemData(
+            id=record["i"]["id"],
+            name=record["i"]["name"],
+            description=record["i"].get("description"),
+        )
+        for record in records
+    ]
+    return {"page": page, "per_page": per_page, "total": total, "data": data}
+
+
+@router.get("/{item_id}", response_model=ItemDetailResponse)
+def get_item(
+    item_id: int,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+):
+    """Retrieve a specific non-line item."""
+    logger.info(f"Fetching item with ID: {item_id}")
+
+    records = run_query(
+        driver,
+        "MATCH (i:Item {id: $id}) RETURN i",
+        {"id": item_id},
+    )
+    if not records:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
+
+    item = records[0]["i"]
+    data = ItemDetailData(
+        id=item["id"],
+        name=item["name"],
+        description=item.get("description"),
+        kind=item["kind"],
+        status=item["status"],
+    )
+    return {
+        "links": {"connections": f"/api/v1/items/{item_id}/connections"},
+        "data": data,
+    }
+
+
+@router.patch("/{item_id}", status_code=204)
+def patch_item(
+    item_id: int,
+    payload: ItemUpdate,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # _token: str = Depends(require_admin),
+):
+    """Edit the fields of a specific non-line item."""
+    logger.info(f"Updating item with ID: {item_id}")
+
+    if payload.name and exists_any_name(driver, payload.name, exclude_id=item_id):
+        raise HTTPException(
+            status_code=409, detail="An item with the same name already exists"
+        )
+
+    update_clauses: list[str] = []
+    parameters: dict = {"id": item_id}
+    if payload.name is not None:
+        update_clauses.append("i.name = $name")
+        parameters["name"] = payload.name
+    if payload.description is not None:
+        update_clauses.append("i.description = $description")
+        parameters["description"] = payload.description
+    if payload.status is not None:
+        update_clauses.append("i.status = $status")
+        parameters["status"] = payload.status.value
+
+    if not update_clauses:
+        return None
+
+    records = run_query(
+        driver,
+        (
+            f"MATCH (i:Item {{id: $id}}) "
+            f"SET {', '.join(update_clauses)} "
+            "RETURN i.id AS id"
+        ),
+        parameters,
+    )
+    if not records:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
+    return None
+
+
+@router.delete("/{item_id}", status_code=204)
+def delete_item(
+    item_id: int,
+    force: Annotated[bool, Query(...)] = False,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # _token: str = Depends(require_admin),
+):
+    """Delete a specific non-line item."""
+    logger.info(f"Deleting item with ID: {item_id}, force: {force}")
+
+    records = run_query(
+        driver,
+        (
+            "MATCH (i:Item {id: $id}) "
+            "OPTIONAL MATCH (i)-[rel:CONNECTED_TO]->() "
+            "RETURN i.id AS id, count(rel) AS linked_count"
+        ),
+        {"id": item_id},
+    )
+    if not records or records[0]["id"] is None:
+        return None
+
+    linked_count = records[0]["linked_count"]
+    if linked_count and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Can't delete an item with connected items; "
+                "set force to true to override"
+            ),
+        )
+
+    run_query(
+        driver,
+        "MATCH (i:Item {id: $id}) DETACH DELETE i",
+        {"id": item_id},
+    )
+    return None
