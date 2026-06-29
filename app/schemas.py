@@ -221,3 +221,30 @@ class LineItemListResponse(BaseModel):
         list[LineItemData],
         Field(..., description="List of line items"),
     ]
+
+
+class LineItemDetailData(LineItemData):
+    """Line item detail data model."""
+
+    kind: Annotated[LineItemKind, Field(..., description="Line item kind")]
+    status: Annotated[LineItemStatus, Field(..., description="Line item status")]
+
+
+class LineItemLinksModel(BaseModel):
+    """Links model for related line item resources."""
+
+    adjacents: Annotated[
+        str,
+        Field(..., description="URL pointing to related adjacent resources"),
+    ]
+    connections: Annotated[
+        str,
+        Field(..., description="URL pointing to related connection resources"),
+    ]
+
+
+class LineItemDetailResponse(BaseModel):
+    """Response model for retrieving a specific line item with links."""
+
+    links: Annotated[LineItemLinksModel, Field(..., description="Related links")]
+    data: Annotated[LineItemDetailData, Field(..., description="Line item details")]

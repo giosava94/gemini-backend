@@ -9,6 +9,8 @@ from app.schemas import (
     LineItemCreate,
     LineItemCreateResponse,
     LineItemData,
+    LineItemDetailData,
+    LineItemDetailResponse,
     LineItemListResponse,
     LineItemStatus,
 )
@@ -234,3 +236,39 @@ def list_line_items(
         for record in records
     ]
     return {"page": page, "per_page": per_page, "total": total, "data": data}
+
+
+@router.get("/{item_id}", response_model=LineItemDetailResponse)
+def get_line_item(
+    beam_id: int,
+    item_id: int,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+):
+    """Retrieve a specific line item under a beam line."""
+    logger.info(f"Fetching line item with ID: {item_id} for beam line {beam_id}")
+    query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
+        "RETURN li"
+    )
+    records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail="Beam line or target item does not exist",
+        )
+
+    item = records[0]["li"]
+    base_url = f"/api/v1/beam-lines/{beam_id}/line-items/{item_id}"
+    links = {
+        "adjacents": f"{base_url}/adjacents",
+        "connections": f"{base_url}/connections",
+    }
+    data = LineItemDetailData(
+        id=item["id"],
+        name=item["name"],
+        description=item.get("description"),
+        kind=item["kind"],
+        status=item["status"],
+    )
+    return {"links": links, "data": data}
