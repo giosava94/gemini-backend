@@ -272,3 +272,52 @@ def get_line_item(
         status=item["status"],
     )
     return {"links": links, "data": data}
+
+
+@router.delete("/{item_id}", status_code=204)
+def delete_line_item(
+    beam_id: int,
+    item_id: int,
+    force: Annotated[bool, Query(...)] = False,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # _token: str = Depends(require_admin),
+):
+    """Delete a specific line item under a beam line."""
+    logger.info(
+        f"Deleting line item with ID: {item_id} for beam line {beam_id}, force: {force}"
+    )
+    if not _beam_line_exists(driver, beam_id):
+        raise HTTPException(status_code=404, detail="Beam line does not exist")
+
+    query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
+        "OPTIONAL MATCH (li)-[outgoing]-(:LineItem) "
+        "WITH li, [rel IN collect(outgoing) "
+        "WHERE type(rel) IN ['ADJACENT_TO', 'CONNECTED_TO']] AS links "
+        "RETURN li.id AS id, size(links) AS linked_count"
+    )
+    records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})
+    if not records:
+        return None
+
+    linked_count = records[0]["linked_count"]
+    if linked_count and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Can't delete an item with a previous or next item; "
+                "set force to true to override"
+            ),
+        )
+
+    run_query(
+        driver,
+        (
+            "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+            "(li:LineItem {id: $id}) "
+            "DETACH DELETE li"
+        ),
+        {"beam_id": beam_id, "id": item_id},
+    )
+    return None
