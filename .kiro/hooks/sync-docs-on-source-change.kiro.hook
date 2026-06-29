@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "name": "Sync Docs on Source Change",
+  "description": "Watches Python source files, config files, and Docker/compose files. When any of these change, asks the agent to update README.md or README_RUN.md to reflect the changes.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/*.py",
+      "pyproject.toml",
+      "requirements.txt",
+      "requirements.dev.txt",
+      "Dockerfile",
+      "compose.dev.yml",
+      "compose.neo4j.dev.yml"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A source file was just edited in this Python FastAPI project. Review the change and determine if any documentation needs to be updated. Check README.md and README_RUN.md — update them if the change affects setup instructions, API endpoints, configuration, dependencies, or any other user-facing behavior. Only make changes if the docs are actually out of date."
+  }
+}
