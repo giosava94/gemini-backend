@@ -9,6 +9,8 @@ from app.schemas import (
     ItemConnectionsDelete,
     ItemConnectionsListResponse,
     ItemConnectionsUpdate,
+    ItemLineItemConnectionData,
+    ItemLineItemConnectionsListResponse,
 )
 
 router = APIRouter(
@@ -162,3 +164,61 @@ def delete_item_connections(
         {"id": item_id, "target_ids": payload.items},
     )
     return None
+
+
+@router.get(
+    "/{item_id}/line-item-connections",
+    response_model=ItemLineItemConnectionsListResponse,
+)
+def list_item_line_item_connections(
+    item_id: int,
+    page: Annotated[int, Query(..., ge=1)] = 1,
+    per_page: Annotated[int, Query(..., ge=1, le=100)] = 10,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+):
+    """Retrieve the beam line items connected to a specific non-line item."""
+    logger.info(
+        f"Listing line item connections for item {item_id} - "
+        f"page: {page}, per_page: {per_page}"
+    )
+
+    existence_records = run_query(
+        driver,
+        "MATCH (i:Item {id: $id}) RETURN i.id AS id",
+        {"id": item_id},
+    )
+    if not existence_records:
+        raise HTTPException(status_code=404, detail="Current item does not exist")
+
+    count_query = (
+        "MATCH (li:LineItem)-[:CONNECTED_TO]->(i:Item {id: $id}) "
+        "RETURN count(li) AS total"
+    )
+    total_records = run_query(driver, count_query, {"id": item_id})
+    total = total_records[0]["total"] if total_records else 0
+
+    skip = (page - 1) * per_page
+    data_query = (
+        "MATCH (b:BeamLine)-[:HAS_LINE_ITEM]->(li:LineItem)-[:CONNECTED_TO]->(i:Item {id: $id}) "
+        "RETURN li, b.id AS beam_id "
+        "SKIP $skip LIMIT $limit"
+    )
+    records = run_query(
+        driver,
+        data_query,
+        {"id": item_id, "skip": skip, "limit": per_page},
+    )
+    data = [
+        ItemLineItemConnectionData(
+            id=record["li"]["id"],
+            name=record["li"]["name"],
+            description=record["li"].get("description"),
+            link=(
+                f"/api/v1/beam-lines/{record['beam_id']}"
+                f"/line-items/{record['li']['id']}"
+            ),
+        )
+        for record in records
+    ]
+    return {"page": page, "per_page": per_page, "total": total, "data": data}
