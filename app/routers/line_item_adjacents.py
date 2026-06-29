@@ -162,6 +162,11 @@ def put_line_item_adjacents(
             ),
         )
 
+    if any(item.id == item_id for item in payload.items):
+        raise HTTPException(
+            status_code=400,
+            detail="An item cannot be adjacent to itself",
+        )
     target_ids = [item.id for item in payload.items]
     query = (
         "MATCH (beam:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"

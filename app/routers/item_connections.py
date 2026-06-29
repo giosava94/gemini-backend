@@ -31,6 +31,12 @@ def put_item_connections(
     if len(payload.items) != len(set(payload.items)):
         raise HTTPException(status_code=400, detail="Duplicated items in the list")
 
+    if item_id in payload.items:
+        raise HTTPException(
+            status_code=400,
+            detail="An item cannot be connected to itself",
+        )
+
     existence_records = run_query(
         driver,
         "MATCH (i:Item {id: $id}) RETURN i.id AS id",
