@@ -28,12 +28,15 @@ def close_driver(driver: Driver) -> None:
 def ensure_constraints(driver: Driver) -> None:
     """Create necessary Neo4j constraints."""
     logger.debug("Ensuring Neo4j constraints...")
-    query = (
+    queries = (
         "CREATE CONSTRAINT beamline_name_unique IF NOT EXISTS "
-        "FOR (n:BeamLine) REQUIRE n.name IS UNIQUE"
+        "FOR (n:BeamLine) REQUIRE n.name IS UNIQUE",
+        "CREATE CONSTRAINT lineitem_name_unique IF NOT EXISTS "
+        "FOR (n:LineItem) REQUIRE n.name IS UNIQUE",
     )
     with driver.session() as session:
-        session.run(query)
+        for query in queries:
+            session.run(query)
     logger.info("Neo4j constraints ensured")
 
 
@@ -86,4 +89,23 @@ def exists_name(driver: Driver, name: str, exclude_id: int | None = None) -> boo
     records = run_query(driver, query, {"name": name, "exclude_id": exclude_id})
     exists = bool(records and records[0]["exists"])
     logger.debug(f"Beam line name '{name}' exists: {exists}")
+    return exists
+
+
+def exists_any_name(driver: Driver, name: str, exclude_id: int | None = None) -> bool:
+    """Check whether a beam line or line item name exists."""
+    logger.debug(
+        f"Checking if item name exists: {name}"
+        + (f" (excluding ID: {exclude_id})" if exclude_id else "")
+    )
+    query = (
+        "MATCH (n) "
+        "WHERE (n:BeamLine OR n:LineItem) "
+        "AND toLower(n.name) = toLower($name) "
+        "AND ($exclude_id IS NULL OR n.id <> $exclude_id) "
+        "RETURN count(n) > 0 AS exists"
+    )
+    records = run_query(driver, query, {"name": name, "exclude_id": exclude_id})
+    exists = bool(records and records[0]["exists"])
+    logger.debug(f"Item name '{name}' exists: {exists}")
     return exists

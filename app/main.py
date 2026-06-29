@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import logging
 from app.config import get_settings
 from app.db import create_driver, close_driver, ensure_constraints
 from app.routers.beam_lines import router as beam_line_router
+from app.routers.line_items import router as line_item_router
 from app.schemas import HealthResponse, StatusEnum
 from datetime import datetime, timezone
 
@@ -42,14 +43,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Gemini Backend", version="0.1.0", lifespan=lifespan)
 app.include_router(beam_line_router)
+app.include_router(line_item_router)
 
 
 @app.get(
     "/api/v1/health",
     response_model=HealthResponse,
     summary="Get service's health status",
+    tags=["health"],
 )
-def get_health():
+def get_health(request: Request):
     """Inspect the service's health status and return a HealthResponse."""
     resp = HealthResponse(
         status=StatusEnum.HEALTHY,
