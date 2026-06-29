@@ -198,3 +198,26 @@ class LineItemCreateResponse(BaseModel):
     """Response model for creating a new line item."""
 
     id: Annotated[int, Field(..., description="Auto-generated item ID")]
+
+
+class LineItemData(BaseModel):
+    """Line item data model."""
+
+    id: Annotated[int, Field(..., description="Auto-generated unique line item ID")]
+    name: Annotated[str, Field(..., description="Line item name")]
+    description: Annotated[
+        str | None,
+        Field(None, description="Line item description"),
+    ] = None
+
+
+class LineItemListResponse(BaseModel):
+    """Response model for listing line items with pagination."""
+
+    page: Annotated[int, Field(..., description="Current page number")]
+    per_page: Annotated[int, Field(..., description="Items per page")]
+    total: Annotated[int, Field(..., description="Total number of items")]
+    data: Annotated[
+        list[LineItemData],
+        Field(..., description="List of line items"),
+    ]

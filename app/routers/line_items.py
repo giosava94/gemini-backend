@@ -1,9 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from neo4j import Driver
+from typing import Annotated
 import logging
 from app.db import exists_any_name, run_query
 from app.dependencies import get_driver, get_logger
-from app.schemas import LineItemCreate, LineItemCreateResponse
+from app.schemas import (
+    LINE_ITEM_KIND_LOOKUP,
+    LineItemCreate,
+    LineItemCreateResponse,
+    LineItemData,
+    LineItemListResponse,
+    LineItemStatus,
+)
 
 router = APIRouter(
     prefix="/api/v1/beam-lines/{beam_id}/line-items",
@@ -35,6 +43,15 @@ def _has_duplicate_adjacent_index(payload: LineItemCreate) -> bool:
             return True
         seen.add(key)
     return False
+
+
+def _beam_line_exists(driver: Driver, beam_id: int) -> bool:
+    records = run_query(
+        driver,
+        "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id",
+        {"id": beam_id},
+    )
+    return bool(records)
 
 
 @router.post("", status_code=201, response_model=LineItemCreateResponse)
@@ -127,3 +144,93 @@ def create_line_item(
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create line item")
     return {"id": records[0]["id"]}
+
+
+@router.get("", response_model=LineItemListResponse)
+def list_line_items(
+    beam_id: int,
+    page: Annotated[int, Query(..., ge=1)] = 1,
+    per_page: Annotated[int, Query(..., ge=1, le=100)] = 10,
+    sort: Annotated[list[str] | None, Query(...)] = None,
+    name: Annotated[str | None, Query(...)] = None,
+    kind: Annotated[str | None, Query(...)] = None,
+    status: Annotated[LineItemStatus | None, Query(...)] = None,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+):
+    """List line items for a beam line with pagination and filtering."""
+    logger.info(
+        "Listing line items - "
+        f"beam_id: {beam_id}, page: {page}, per_page: {per_page}, "
+        f"name filter: {name}, kind filter: {kind}, "
+        f"status: {status.value if status else None}"
+    )
+    if not _beam_line_exists(driver, beam_id):
+        raise HTTPException(status_code=404, detail="Beam line does not exist")
+
+    if sort:
+        for key in sort:
+            if key not in ("name", "kind"):
+                raise HTTPException(status_code=422, detail=f"Invalid sort key: {key}")
+
+    normalized_kind = None
+    if kind is not None:
+        normalized_kind = LINE_ITEM_KIND_LOOKUP.get(kind.lower())
+        if normalized_kind is None:
+            allowed = ", ".join(item.value for item in LINE_ITEM_KIND_LOOKUP.values())
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid kind; must be one of: {allowed}",
+            )
+
+    where_clause = (
+        "WHERE ($status IS NULL OR li.status = $status) "
+        "AND ($name IS NULL OR toLower(li.name) CONTAINS toLower($name)) "
+        "AND ($kind IS NULL OR li.kind = $kind)"
+    )
+    parameters = {
+        "beam_id": beam_id,
+        "status": status.value if status else None,
+        "name": name,
+        "kind": normalized_kind.value if normalized_kind else None,
+    }
+    count_query = (
+        "MATCH (b:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem) "
+        f"{where_clause} "
+        "RETURN count(li) AS total"
+    )
+    total_records = run_query(driver, count_query, parameters)
+    total = total_records[0]["total"] if total_records else 0
+
+    sort_clauses = []
+    if sort:
+        for key in sort:
+            if key == "name":
+                sort_clauses.append("toLower(li.name)")
+            elif key == "kind":
+                sort_clauses.append("li.kind")
+    order_clause = f"ORDER BY {', '.join(sort_clauses)}" if sort_clauses else ""
+    query = (
+        "MATCH (b:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem) "
+        f"{where_clause} "
+        f"RETURN li {order_clause} SKIP $skip LIMIT $limit"
+    )
+    skip = (page - 1) * per_page
+    records = run_query(
+        driver,
+        query,
+        {
+            **parameters,
+            "skip": skip,
+            "limit": per_page,
+        },
+    )
+    data = [
+        LineItemData(
+            id=record["li"]["id"],
+            name=record["li"]["name"],
+            description=record["li"].get("description"),
+        )
+        for record in records
+    ]
+    return {"page": page, "per_page": per_page, "total": total, "data": data}
