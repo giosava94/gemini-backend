@@ -10,6 +10,7 @@ from app.schemas import (
     AdjacentPosition,
     LineItemAdjacent,
     LineItemAdjacentData,
+    LineItemAdjacentsDelete,
     LineItemAdjacentsListResponse,
     LineItemAdjacentsUpdate,
     LineItemCreate,
@@ -500,6 +501,54 @@ def put_line_item_adjacents(
         driver,
         create_query,
         {"beam_id": beam_id, "id": item_id, "adjacents": adjacents},
+    )
+    return None
+
+
+@router.delete("/{item_id}/adjacents", status_code=204)
+def delete_line_item_adjacents(
+    beam_id: int,
+    item_id: int,
+    payload: LineItemAdjacentsDelete,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+    # _token: str = Depends(require_admin),
+):
+    """Disconnect one or multiple adjacent line items from the current one."""
+    logger.info(
+        f"Disconnecting adjacents from line item {item_id} on beam line {beam_id}: "
+        f"{payload.items}"
+    )
+
+    if len(payload.items) != len(set(payload.items)):
+        raise HTTPException(status_code=400, detail="Duplicated items in the list")
+
+    existence_records = run_query(
+        driver,
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
+        "RETURN li.id AS id",
+        {"beam_id": beam_id, "id": item_id},
+    )
+    if not existence_records:
+        raise HTTPException(
+            status_code=404,
+            detail="Beam line or current item does not exist",
+        )
+
+    # Delete PREVIOUS/NEXT relationships in both directions between current and each target
+    run_query(
+        driver,
+        (
+            "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+            "(current:LineItem {id: $id}) "
+            "UNWIND $target_ids AS target_id "
+            "MATCH (target:LineItem {id: target_id}) "
+            "OPTIONAL MATCH (current)-[r1:PREVIOUS|NEXT]->(target) "
+            "OPTIONAL MATCH (target)-[r2:PREVIOUS|NEXT]->(current) "
+            "FOREACH (_ IN CASE WHEN r1 IS NOT NULL THEN [1] ELSE [] END | DELETE r1) "
+            "FOREACH (_ IN CASE WHEN r2 IS NOT NULL THEN [1] ELSE [] END | DELETE r2)"
+        ),
+        {"beam_id": beam_id, "id": item_id, "target_ids": payload.items},
     )
     return None
 

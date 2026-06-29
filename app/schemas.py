@@ -154,6 +154,15 @@ class LineItemAdjacent(BaseModel):
         return normalized
 
 
+class LineItemAdjacentsDelete(BaseModel):
+    """Request model for disconnecting adjacent line items."""
+
+    items: Annotated[
+        list[int],
+        Field(..., min_length=1, description="List of line item IDs to disconnect"),
+    ]
+
+
 class LineItemAdjacentsUpdate(BaseModel):
     """Request model for adding adjacent line items."""
 
