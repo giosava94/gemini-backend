@@ -5,8 +5,12 @@ import logging
 from app.db import exists_any_name, run_query
 from app.dependencies import get_driver, get_logger
 from app.schemas import (
+    ADJ_POS_LOOKUP,
     LINE_ITEM_KIND_LOOKUP,
+    AdjacentPosition,
     LineItemAdjacent,
+    LineItemAdjacentData,
+    LineItemAdjacentsListResponse,
     LineItemAdjacentsUpdate,
     LineItemCreate,
     LineItemCreateResponse,
@@ -134,9 +138,14 @@ def create_line_item(
         "CALL (li) { "
         "UNWIND $adjacents AS adjacent "
         "MATCH (target:LineItem {id: adjacent.id}) "
-        "CREATE (li)-[:ADJACENT_TO {"
-        "position: adjacent.position, index: adjacent.index"
-        "}]->(target) "
+        "FOREACH (_ IN CASE WHEN adjacent.position IN ['Previous', 'Dual'] THEN [1] ELSE [] END | "
+        "  CREATE (li)-[:PREVIOUS {index: adjacent.index}]->(target) "
+        "  CREATE (target)-[:NEXT {index: adjacent.index}]->(li) "
+        ") "
+        "FOREACH (_ IN CASE WHEN adjacent.position IN ['Next', 'Dual'] THEN [1] ELSE [] END | "
+        "  CREATE (li)-[:NEXT {index: adjacent.index}]->(target) "
+        "  CREATE (target)-[:PREVIOUS {index: adjacent.index}]->(li) "
+        ") "
         "RETURN count(*) AS adjacent_count "
         "} "
         "CALL (li) { "
@@ -291,6 +300,106 @@ def get_line_item(
     return {"links": links, "data": data}
 
 
+@router.get("/{item_id}/adjacents", response_model=LineItemAdjacentsListResponse)
+def list_line_item_adjacents(
+    beam_id: int,
+    item_id: int,
+    page: Annotated[int, Query(..., ge=1)] = 1,
+    per_page: Annotated[int, Query(..., ge=1, le=100)] = 10,
+    sort: Annotated[list[str] | None, Query(...)] = None,
+    position: Annotated[str | None, Query(...)] = None,
+    driver: Driver = Depends(get_driver),
+    logger: logging.Logger = Depends(get_logger),
+):
+    """Retrieve the list of adjacent items of the current line item."""
+    logger.info(
+        f"Listing adjacents for line item {item_id} on beam line {beam_id} - "
+        f"page: {page}, per_page: {per_page}, sort: {sort}, position: {position}"
+    )
+
+    # Validate beam line and current item existence
+    existence_records = run_query(
+        driver,
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
+        "RETURN li.id AS id",
+        {"beam_id": beam_id, "id": item_id},
+    )
+    if not existence_records:
+        raise HTTPException(
+            status_code=404,
+            detail="Beam line or current item does not exist",
+        )
+
+    # Validate sort keys
+    if sort:
+        for key in sort:
+            if key != "position":
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid sort key: {key}. Valid values: position",
+                )
+
+    # Validate and normalise position filter
+    normalized_position: AdjacentPosition | None = None
+    if position is not None:
+        normalized_position = ADJ_POS_LOOKUP.get(position.lower())
+        if normalized_position is None:
+            allowed = ", ".join(item.value for item in AdjacentPosition)
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid position; must be one of: {allowed}",
+            )
+
+    where_position = "WHERE ($position IS NULL OR rel_type = $position) "
+    base_params: dict = {
+        "beam_id": beam_id,
+        "id": item_id,
+        "position": normalized_position.value if normalized_position else None,
+    }
+
+    count_query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(current:LineItem {id: $id})-[rel:PREVIOUS|NEXT]->(adj:LineItem) "
+        "WITH adj, "
+        "  CASE type(rel) WHEN 'PREVIOUS' THEN 'Previous' ELSE 'Next' END AS rel_type, "
+        "  rel.index AS index "
+        f"{where_position}"
+        "RETURN count(adj) AS total"
+    )
+    total_records = run_query(driver, count_query, base_params)
+    total = total_records[0]["total"] if total_records else 0
+
+    order_clause = "ORDER BY rel_type" if sort and "position" in sort else ""
+    data_query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(current:LineItem {id: $id})-[rel:PREVIOUS|NEXT]->(adj:LineItem) "
+        "WITH adj, "
+        "  CASE type(rel) WHEN 'PREVIOUS' THEN 'Previous' ELSE 'Next' END AS rel_type, "
+        "  rel.index AS index "
+        f"{where_position}"
+        f"RETURN adj, rel_type AS position, index "
+        f"{order_clause} SKIP $skip LIMIT $limit"
+    )
+    skip = (page - 1) * per_page
+    records = run_query(
+        driver,
+        data_query,
+        {**base_params, "skip": skip, "limit": per_page},
+    )
+    data = [
+        LineItemAdjacentData(
+            id=record["adj"]["id"],
+            name=record["adj"]["name"],
+            description=record["adj"].get("description"),
+            position=record["position"],
+            index=record["index"],
+            link=f"/api/v1/beam-lines/{beam_id}/line-items/{record['adj']['id']}",
+        )
+        for record in records
+    ]
+    return {"page": page, "per_page": per_page, "total": total, "data": data}
+
+
 @router.put("/{item_id}/adjacents", status_code=201)
 def put_line_item_adjacents(
     beam_id: int,
@@ -350,9 +459,9 @@ def put_line_item_adjacents(
         "UNWIND $adjacents AS adjacent "
         "WITH current, adjacent "
         "WHERE adjacent.index IS NOT NULL "
-        "OPTIONAL MATCH (current)-[rel]->(existing:LineItem) "
-        "WHERE type(rel) = 'ADJACENT_TO' "
-        "AND rel.position = adjacent.position "
+        "OPTIONAL MATCH (current)-[rel:PREVIOUS|NEXT]->(existing:LineItem) "
+        "WHERE (adjacent.position IN ['Previous', 'Dual'] AND type(rel) = 'PREVIOUS' "
+        "       OR adjacent.position IN ['Next', 'Dual'] AND type(rel) = 'NEXT') "
         "AND rel.index = adjacent.index "
         "AND existing.id <> adjacent.id "
         "RETURN count(rel) > 0 AS has_conflict"
@@ -377,9 +486,15 @@ def put_line_item_adjacents(
         "UNWIND $adjacents AS adjacent "
         "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
         "(target:LineItem {id: adjacent.id}) "
-        "MERGE (current)-[rel:ADJACENT_TO {position: adjacent.position}]->(target) "
-        "ON CREATE SET rel.index = adjacent.index "
-        "RETURN count(rel) AS linked_count"
+        "FOREACH (_ IN CASE WHEN adjacent.position IN ['Previous', 'Dual'] THEN [1] ELSE [] END | "
+        "  MERGE (current)-[r1:PREVIOUS]->(target) ON CREATE SET r1.index = adjacent.index "
+        "  MERGE (target)-[r2:NEXT]->(current) ON CREATE SET r2.index = adjacent.index "
+        ") "
+        "FOREACH (_ IN CASE WHEN adjacent.position IN ['Next', 'Dual'] THEN [1] ELSE [] END | "
+        "  MERGE (current)-[r3:NEXT]->(target) ON CREATE SET r3.index = adjacent.index "
+        "  MERGE (target)-[r4:PREVIOUS]->(current) ON CREATE SET r4.index = adjacent.index "
+        ") "
+        "RETURN count(target) AS linked_count"
     )
     run_query(
         driver,
@@ -456,7 +571,7 @@ def delete_line_item(
         "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
         "OPTIONAL MATCH (li)-[outgoing]-(:LineItem) "
         "WITH li, [rel IN collect(outgoing) "
-        "WHERE type(rel) IN ['ADJACENT_TO', 'CONNECTED_TO']] AS links "
+        "WHERE type(rel) IN ['PREVIOUS', 'NEXT', 'CONNECTED_TO']] AS links "
         "RETURN li.id AS id, size(links) AS linked_count"
     )
     records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})

@@ -274,3 +274,43 @@ class LineItemDetailResponse(BaseModel):
 
     links: Annotated[LineItemLinksModel, Field(..., description="Related links")]
     data: Annotated[LineItemDetailData, Field(..., description="Line item details")]
+
+
+class LineItemAdjacentData(BaseModel):
+    """Adjacent line item data model."""
+
+    id: Annotated[int, Field(..., description="Auto-generated unique line item ID")]
+    name: Annotated[str, Field(..., description="Line item name in the map")]
+    description: Annotated[
+        str | None,
+        Field(None, description="Line item description"),
+    ] = None
+    position: Annotated[
+        AdjacentPosition,
+        Field(
+            ..., description="Position of the linked item relative to the current one"
+        ),
+    ]
+    index: Annotated[
+        int | None,
+        Field(
+            None,
+            description="Ordering index for multiple adjacent items at the same position",
+        ),
+    ] = None
+    link: Annotated[
+        str,
+        Field(..., description="URL pointing to the line item resource"),
+    ]
+
+
+class LineItemAdjacentsListResponse(BaseModel):
+    """Response model for listing adjacent line items with pagination."""
+
+    page: Annotated[int, Field(..., description="Current page number")]
+    per_page: Annotated[int, Field(..., description="Items per page")]
+    total: Annotated[int, Field(..., description="Total number of items")]
+    data: Annotated[
+        list[LineItemAdjacentData],
+        Field(..., description="List of adjacent line items"),
+    ]
