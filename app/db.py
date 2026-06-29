@@ -76,24 +76,6 @@ def find_by_id(driver: Driver, item_id: int) -> dict | None:
     return result
 
 
-def exists_name(driver: Driver, name: str, exclude_id: int | None = None) -> bool:
-    """Check if a beam line name exists (case-insensitive)."""
-    logger.debug(
-        f"Checking if beam line name exists: {name}"
-        + (f" (excluding ID: {exclude_id})" if exclude_id else "")
-    )
-    query = (
-        "MATCH (b:BeamLine) "
-        "WHERE toLower(b.name) = toLower($name) "
-        "AND ($exclude_id IS NULL OR b.id <> $exclude_id) "
-        "RETURN count(b) > 0 AS exists"
-    )
-    records = run_query(driver, query, {"name": name, "exclude_id": exclude_id})
-    exists = bool(records and records[0]["exists"])
-    logger.debug(f"Beam line name '{name}' exists: {exists}")
-    return exists
-
-
 def exists_any_name(driver: Driver, name: str, exclude_id: int | None = None) -> bool:
     """Check whether a beam line, line item, or item name exists."""
     logger.debug(

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from neo4j import Driver
 from typing import Annotated
 import logging
-from app.db import run_query, find_by_id, exists_name
+from app.db import run_query, find_by_id, exists_any_name
 from app.schemas import (
     BeamLineCreate,
     BeamLineData,
@@ -25,7 +25,7 @@ def create_beam_line(
     """Create a new beam line."""
     logger.info(f"Creating beam line with name: {payload.name}")
     name = payload.name
-    if exists_name(driver, name):
+    if exists_any_name(driver, name):
         raise HTTPException(
             status_code=409, detail="Item with this name already exists"
         )
@@ -115,7 +115,7 @@ def patch_beam_line(
 ):
     """Update a beam line."""
     logger.info(f"Updating beam line with ID: {beam_id}")
-    if payload.name and exists_name(driver, payload.name, exclude_id=beam_id):
+    if payload.name and exists_any_name(driver, payload.name, exclude_id=beam_id):
         raise HTTPException(
             status_code=409, detail="An item with the same name already exists"
         )

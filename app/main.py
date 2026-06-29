@@ -6,7 +6,9 @@ from app.db import create_driver, close_driver, ensure_constraints
 from app.routers.beam_lines import router as beam_line_router
 from app.routers.line_items import router as line_item_router
 from app.routers.line_item_adjacents import router as line_item_adjacents_router
+from app.routers.line_item_connections import router as line_item_connections_router
 from app.routers.items import router as item_router
+from app.routers.item_connections import router as item_connections_router
 from app.schemas import HealthResponse, StatusEnum
 from datetime import datetime, timezone
 
@@ -47,7 +49,9 @@ app = FastAPI(title="Gemini Backend", version="0.1.0", lifespan=lifespan)
 app.include_router(beam_line_router)
 app.include_router(line_item_router)
 app.include_router(line_item_adjacents_router)
+app.include_router(line_item_connections_router)
 app.include_router(item_router)
+app.include_router(item_connections_router)
 
 
 @app.get(
