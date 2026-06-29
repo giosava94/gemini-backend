@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Sync Inline Docs on Source Change",
+  "description": "When a Python source file is edited, reviews the change and updates inline documentation if it's out of date. Checks function parameters and behavior, adds examples where possible, keeps private function docs concise, and follows PEP257 guidelines.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "app/**/*.py"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A Python source file in this FastAPI project was just edited. Review the change and determine if any inline documentation (docstrings) needs to be updated. Follow these rules:\n- Only make changes if the docs are actually out of date or missing\n- Check function parameters and content to determine new or changed behavior\n- Add usage examples in docstrings when possible for public functions\n- For private functions (prefixed with _), keep docstrings small and concise\n- Follow PEP257 guidelines throughout\n- Do not change any logic or code, only update docstrings"
+  }
+}

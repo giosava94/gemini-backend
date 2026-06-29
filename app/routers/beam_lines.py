@@ -22,7 +22,20 @@ def create_beam_line(
     logger: logging.Logger = Depends(get_logger),
     # token: str = Depends(require_admin),
 ):
-    """Create a new beam line."""
+    """Create a new beam line.
+
+    Returns the auto-generated ID of the created node.  Raises ``409`` when
+    a BeamLine, LineItem, or Item with the same name already exists (names
+    are unique across all node types).
+
+    Example request body::
+
+        {"name": "LEBT", "description": "Low Energy Beam Transport"}
+
+    Example response::
+
+        {"id": 1}
+    """
     logger.info(f"Creating beam line with name: {payload.name}")
     name = payload.name
     if exists_any_name(driver, name):
@@ -54,7 +67,17 @@ def list_beam_lines(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
-    """List beam lines with pagination and filtering."""
+    """Return a paginated list of beam lines with optional filtering and sorting.
+
+    :param page: 1-based page number.
+    :param per_page: Number of results per page (1–100).
+    :param sort: Optional list of sort keys; only ``"name"`` is accepted.
+    :param name: Optional case-insensitive substring filter on the beam line name.
+
+    Raises ``422`` when an unsupported sort key is supplied.
+
+    Example: ``GET /api/v1/beam-lines?page=1&per_page=5&sort=name&name=lebt``
+    """
     logger.info(
         f"Listing beam lines - page: {page}, per_page: {per_page}, name filter: {name}"
     )
@@ -91,7 +114,12 @@ def get_beam_line(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
-    """Retrieve a specific beam line."""
+    """Retrieve a single beam line by its ID.
+
+    Returns the beam line data along with a ``links`` object that points to
+    the related line items resource.  Raises ``404`` when no BeamLine with
+    *beam_id* exists.
+    """
     logger.info(f"Fetching beam line with ID: {beam_id}")
     item = find_by_id(driver, beam_id)
     if not item:
@@ -113,7 +141,13 @@ def patch_beam_line(
     logger: logging.Logger = Depends(get_logger),
     # token: Annotated[str, Depends(require_admin)] = Depends(require_admin),
 ):
-    """Update a beam line."""
+    """Partially update a beam line's name and/or description.
+
+    Only the fields present in *payload* are changed; omitted fields are left
+    untouched.  Returns ``204 No Content`` on success.  Raises ``404`` when
+    the beam line does not exist, and ``409`` when the requested name is
+    already taken by another node.
+    """
     logger.info(f"Updating beam line with ID: {beam_id}")
     if payload.name and exists_any_name(driver, payload.name, exclude_id=beam_id):
         raise HTTPException(
@@ -144,7 +178,13 @@ def delete_beam_line(
     logger: logging.Logger = Depends(get_logger),
     # token: Annotated[str, Depends(require_admin)] = Depends(require_admin),
 ):
-    """Delete a beam line."""
+    """Delete a beam line by its ID.
+
+    Returns ``204 No Content`` on success.  Raises ``404`` when the beam line
+    does not exist.  Raises ``409`` when the beam line still has associated
+    line items and *force* is ``False``; pass ``?force=true`` to detach-delete
+    the node together with all its relationships.
+    """
     logger.info(f"Deleting beam line with ID: {beam_id}, force: {force}")
     query = (
         "MATCH (b:BeamLine {id: $id}) "

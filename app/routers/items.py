@@ -21,7 +21,7 @@ router = APIRouter(
 
 
 def _ids_exist(driver: Driver, ids: list[int]) -> bool:
-    """Return whether every ID belongs to an existing Item or LineItem node."""
+    """Return True if every ID in *ids* belongs to an existing Item or LineItem node."""
     distinct_ids = list(set(ids))
     if not distinct_ids:
         return True
@@ -41,7 +41,24 @@ def create_item(
     logger: logging.Logger = Depends(get_logger),
     # _token: str = Depends(require_admin),
 ):
-    """Create a new non-line item."""
+    """Create a new non-line item.
+
+    Raises ``409`` when a node with the same name already exists.  Raises
+    ``404`` when any of the requested connection IDs do not exist.
+
+    Example request body::
+
+        {
+            "name": "RACK-01",
+            "kind": "Rack",
+            "status": 0,
+            "connections": []
+        }
+
+    Example response::
+
+        {"id": 42}
+    """
     logger.info(f"Creating item with name: {payload.name}")
 
     if exists_any_name(driver, payload.name):
@@ -98,7 +115,14 @@ def list_items(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
-    """List non-line items with pagination and optional filtering."""
+    """List non-line items with optional name filtering, sorting, and pagination.
+
+    *page* is 1-based; *per_page* is clamped to 1–100.  *sort* accepts one or
+    more of ``"name"`` or ``"kind"``; any other value raises ``422``.  *name*
+    is matched as a case-insensitive substring against the item name.
+
+    Example: ``GET /api/v1/items?page=1&per_page=10&sort=name&name=rack``
+    """
     logger.info(
         f"Listing items - page: {page}, per_page: {per_page}, "
         f"sort: {sort}, name filter: {name}"
@@ -155,7 +179,11 @@ def get_item(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
-    """Retrieve a specific non-line item."""
+    """Retrieve a specific non-line item by its ID.
+
+    Returns the item data and a ``links`` object pointing to the connections
+    resource.  Raises ``404`` when no Item with *item_id* exists.
+    """
     logger.info(f"Fetching item with ID: {item_id}")
 
     records = run_query(
@@ -188,7 +216,13 @@ def patch_item(
     logger: logging.Logger = Depends(get_logger),
     # _token: str = Depends(require_admin),
 ):
-    """Edit the fields of a specific non-line item."""
+    """Partially update a non-line item's name, description, and/or status.
+
+    Only the fields present in *payload* are changed; omitted fields are left
+    untouched.  Returns ``204 No Content`` on success.  Raises ``404`` when
+    the item does not exist, and ``409`` when the requested name is already
+    taken by another node.
+    """
     logger.info(f"Updating item with ID: {item_id}")
 
     if payload.name and exists_any_name(driver, payload.name, exclude_id=item_id):
@@ -233,7 +267,13 @@ def delete_item(
     logger: logging.Logger = Depends(get_logger),
     # _token: str = Depends(require_admin),
 ):
-    """Delete a specific non-line item."""
+    """Delete a non-line item by its ID.
+
+    Returns ``204 No Content`` on success.  Raises ``409`` when the item still
+    has outgoing ``CONNECTED_TO`` relationships and *force* is ``False``; pass
+    ``?force=true`` to detach-delete the node together with all its
+    relationships.  Returns ``204`` silently when the item does not exist.
+    """
     logger.info(f"Deleting item with ID: {item_id}, force: {force}")
 
     records = run_query(

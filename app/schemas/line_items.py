@@ -55,6 +55,7 @@ class LineItemCreate(BaseModel):
     @field_validator("kind", mode="before")
     @classmethod
     def validate_kind(cls, value: str | LineItemKind) -> LineItemKind:
+        """Normalise *value* to a :class:`LineItemKind` member, case-insensitively."""
         if isinstance(value, LineItemKind):
             return value
         if not isinstance(value, str):

@@ -15,7 +15,10 @@ ADJ_POS_LOOKUP = {item.value.lower(): item for item in AdjacentPosition}
 
 
 def _validate_position(value: str | AdjacentPosition) -> AdjacentPosition:
-    """Shared position validator used by multiple models."""
+    """Normalise *value* to an :class:`AdjacentPosition` member, case-insensitively.
+
+    Raises ``ValueError`` when *value* is not a recognised position string.
+    """
     if isinstance(value, AdjacentPosition):
         return value
     if not isinstance(value, str):

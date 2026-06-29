@@ -50,6 +50,7 @@ class ItemCreate(BaseModel):
     @field_validator("kind", mode="before")
     @classmethod
     def validate_kind(cls, value: str | ItemKind) -> ItemKind:
+        """Normalise *value* to an :class:`ItemKind` member, case-insensitively."""
         if isinstance(value, ItemKind):
             return value
         if not isinstance(value, str):

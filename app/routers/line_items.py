@@ -24,7 +24,7 @@ router = APIRouter(
 
 
 def _line_item_ids_exist(driver: Driver, ids: list[int]) -> bool:
-    """Return whether every distinct line item ID exists."""
+    """Return True if every distinct ID in *ids* belongs to an existing LineItem node."""
     distinct_ids = list(set(ids))
     if not distinct_ids:
         return True
@@ -38,10 +38,12 @@ def _line_item_ids_exist(driver: Driver, ids: list[int]) -> bool:
 
 
 def _has_duplicate_adjacent_index(payload: LineItemCreate) -> bool:
+    """Return True if *payload* contains two adjacents with the same (position, index) key."""
     return _has_duplicate_adjacent_index_in_items(payload.adjacents)
 
 
 def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> bool:
+    """Return True if *items* contains two entries sharing the same (position, index) pair."""
     seen: set[tuple[str, int]] = set()
     for adjacent in items:
         if adjacent.index is None:
@@ -54,6 +56,7 @@ def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> boo
 
 
 def _beam_line_exists(driver: Driver, beam_id: int) -> bool:
+    """Return True if a BeamLine node with *beam_id* exists in the database."""
     records = run_query(
         driver,
         "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id",
@@ -70,7 +73,27 @@ def create_line_item(
     logger: logging.Logger = Depends(get_logger),
     # _token: str = Depends(require_admin),
 ):
-    """Create a new line item under a beam line."""
+    """Create a new line item under a beam line.
+
+    Raises ``404`` when the beam line does not exist.  Raises ``409`` when a
+    node with the same name already exists.  Raises ``400`` when the adjacents
+    list contains duplicate ``(position, index)`` pairs.  Raises ``404`` when
+    any adjacent or connection ID does not exist.
+
+    Example request body::
+
+        {
+            "name": "QD01",
+            "kind": "ES_Quadrupole",
+            "status": 0,
+            "adjacents": [{"id": 5, "position": "Previous", "index": 0}],
+            "connections": []
+        }
+
+    Example response::
+
+        {"id": 12}
+    """
     logger.info(f"Creating line item with name: {payload.name} for beam line {beam_id}")
     beam_records = run_query(
         driver,
@@ -171,7 +194,21 @@ def list_line_items(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
-    """List line items for a beam line with pagination and filtering."""
+    """List line items for a beam line with optional filtering, sorting, and pagination.
+
+    :param beam_id: ID of the parent beam line.
+    :param page: 1-based page number.
+    :param per_page: Number of results per page (1–100).
+    :param sort: Optional sort keys; accepted values are ``"name"`` and ``"kind"``.
+    :param name: Optional case-insensitive substring filter on the item name.
+    :param kind: Optional case-insensitive kind filter (e.g. ``"diagnostic"``).
+    :param status: Optional status filter using :class:`LineItemStatus` values.
+
+    Raises ``404`` when the beam line does not exist.  Raises ``422`` for
+    unsupported sort keys or unrecognised kind values.
+
+    Example: ``GET /api/v1/beam-lines/1/line-items?page=1&per_page=10&kind=diagnostic``
+    """
     logger.info(
         "Listing line items - "
         f"beam_id: {beam_id}, page: {page}, per_page: {per_page}, "
@@ -256,7 +293,12 @@ def get_line_item(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
-    """Retrieve a specific line item under a beam line."""
+    """Retrieve a specific line item under a beam line.
+
+    Returns the item data along with ``links`` pointing to the adjacents and
+    connections sub-resources.  Raises ``404`` when either the beam line or
+    the line item does not exist.
+    """
     logger.info(f"Fetching line item with ID: {item_id} for beam line {beam_id}")
     query = (
         "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
@@ -294,7 +336,13 @@ def patch_line_item(
     logger: logging.Logger = Depends(get_logger),
     # _token: str = Depends(require_admin),
 ):
-    """Update a specific line item under a beam line."""
+    """Partially update a line item's name, description, and/or status.
+
+    Only the fields present in *payload* are changed; omitted fields are left
+    untouched.  Returns ``204 No Content`` on success.  Raises ``404`` when
+    the beam line or item does not exist, and ``409`` when the new name is
+    already taken.
+    """
     logger.info(f"Updating line item with ID: {item_id} for beam line {beam_id}")
     if payload.name and exists_any_name(driver, payload.name, exclude_id=item_id):
         raise HTTPException(
@@ -341,7 +389,14 @@ def delete_line_item(
     logger: logging.Logger = Depends(get_logger),
     # _token: str = Depends(require_admin),
 ):
-    """Delete a specific line item under a beam line."""
+    """Delete a line item under a beam line by its ID.
+
+    Returns ``204 No Content`` on success.  Raises ``404`` when the beam line
+    does not exist.  Raises ``409`` when the item still has PREVIOUS, NEXT, or
+    CONNECTED_TO relationships and *force* is ``False``; pass ``?force=true``
+    to detach-delete the node together with all its relationships.  Returns
+    ``204`` silently when the item itself does not exist.
+    """
     logger.info(
         f"Deleting line item with ID: {item_id} for beam line {beam_id}, force: {force}"
     )

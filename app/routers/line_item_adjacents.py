@@ -22,6 +22,7 @@ router = APIRouter(
 
 
 def _has_duplicate_adjacent_items(items: list[LineItemAdjacent]) -> bool:
+    """Return True if *items* contains two entries with the same (id, position) pair."""
     seen: set[tuple[int, str]] = set()
     for adjacent in items:
         key = (adjacent.id, adjacent.position.value)
@@ -32,6 +33,7 @@ def _has_duplicate_adjacent_items(items: list[LineItemAdjacent]) -> bool:
 
 
 def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> bool:
+    """Return True if *items* contains two entries sharing the same (position, index) pair."""
     seen: set[tuple[str, int]] = set()
     for adjacent in items:
         if adjacent.index is None:
@@ -54,7 +56,21 @@ def list_line_item_adjacents(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
-    """Retrieve the list of adjacent items of the current line item."""
+    """Retrieve adjacent line items of the current line item with optional filtering and sorting.
+
+    :param beam_id: ID of the parent beam line.
+    :param item_id: ID of the line item whose adjacents are listed.
+    :param page: 1-based page number.
+    :param per_page: Number of results per page (1–100).
+    :param sort: Optional sort keys; only ``"position"`` is accepted.
+    :param position: Optional case-insensitive filter on the adjacent position
+        (``"previous"``, ``"next"``, or ``"dual"``).
+
+    Raises ``404`` when the beam line or item does not exist.  Raises ``422``
+    for unsupported sort keys or unrecognised position values.
+
+    Example: ``GET /api/v1/beam-lines/1/line-items/5/adjacents?position=previous``
+    """
     logger.info(
         f"Listing adjacents for line item {item_id} on beam line {beam_id} - "
         f"page: {page}, per_page: {per_page}, sort: {sort}, position: {position}"

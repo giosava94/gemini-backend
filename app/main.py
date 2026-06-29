@@ -1,3 +1,10 @@
+"""FastAPI application entry-point.
+
+Creates the ``app`` instance, registers all routers, and wires up the
+lifespan context manager that initialises (and tears down) the Neo4j driver
+and the application logger.
+"""
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 import logging
@@ -61,7 +68,38 @@ app.include_router(item_connections_router)
     tags=["health"],
 )
 def get_health(request: Request):
-    """Inspect the service's health status and return a HealthResponse."""
+    """Return the service health status.
+
+    Pings the Neo4j database to verify connectivity.  Returns
+    ``HEALTHY`` when the database is reachable, ``NOT_HEALTHY`` otherwise.
+
+    Args:
+        request: The incoming FastAPI request, used to access the shared
+            Neo4j driver attached to ``request.app.driver``.
+
+    Returns:
+        HealthResponse: Current status, optional detail message, and a
+        UTC timestamp.
+
+    Example response (healthy)::
+
+        {
+            "status": "HEALTHY",
+            "details": {"message": "Service is running"},
+            "timestamp": "2024-01-01T00:00:00Z"
+        }
+
+    Example response (unhealthy)::
+
+        {
+            "status": "NOT_HEALTHY",
+            "details": {
+                "message": "Connection with the database is down",
+                "error": "<exception detail>"
+            },
+            "timestamp": "2024-01-01T00:00:00Z"
+        }
+    """
     try:
         driver = request.app.driver
         driver.verify_connectivity()

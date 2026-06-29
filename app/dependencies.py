@@ -5,21 +5,28 @@ import logging
 
 
 def get_driver_from_state(request: Request) -> Driver:
-    """Retrieve the Neo4j driver from app state."""
+    """Retrieve the Neo4j driver stored on the FastAPI application state.
+
+    :raises RuntimeError: If the driver has not been initialised yet.
+    """
     if not hasattr(request.app, "driver"):
         raise RuntimeError("Neo4j driver is not initialized")
     return request.app.driver
 
 
 async def get_driver(request: Request) -> Driver:
-    """Async dependency to get the Neo4j driver."""
+    """FastAPI dependency that returns the Neo4j driver from application state."""
     return get_driver_from_state(request)
 
 
 def get_current_token(
     authorization: Annotated[str | None, Header(None)] = None,
 ) -> str | None:
-    """Simple Authorization header extractor. Expects 'Bearer <token>' or None."""
+    """Extract a Bearer token from the ``Authorization`` header.
+
+    Returns the raw token string when the header is present and well-formed
+    (``Bearer <token>``), or ``None`` otherwise.
+    """
     if not authorization:
         return None
     parts = authorization.split()
@@ -29,6 +36,12 @@ def get_current_token(
 
 
 def require_admin(token: str | None = Depends(get_current_token)):
+    """FastAPI dependency that enforces admin-level authentication.
+
+    Raises ``401 Unauthorized`` when no token is present, and
+    ``403 Forbidden`` when the token does not match the expected admin token.
+    Returns the validated token string on success.
+    """
     if token is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
     if token != "admin-token":
@@ -37,7 +50,10 @@ def require_admin(token: str | None = Depends(get_current_token)):
 
 
 def get_logger(request: Request) -> logging.Logger:
-    """Retrieve the application logger from app state."""
+    """FastAPI dependency that returns the application logger from app state.
+
+    :raises RuntimeError: If the logger has not been initialised yet.
+    """
     if not hasattr(request.app, "logger"):
         raise RuntimeError("Logger is not initialized")
     return request.app.logger

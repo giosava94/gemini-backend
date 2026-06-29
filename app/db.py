@@ -8,7 +8,14 @@ logger = logging.getLogger("gemini_backend.db")
 
 
 def create_driver() -> Driver:
-    """Create and initialize a Neo4j driver connection."""
+    """Create and return a verified Neo4j driver using the application settings.
+
+    Reads ``neo4j_uri``, ``neo4j_user``, and ``neo4j_password`` from
+    :func:`~app.config.get_settings` and calls
+    ``driver.verify_connectivity()`` before returning.
+
+    :raises neo4j.exceptions.ServiceUnavailable: If the database is unreachable.
+    """
     logger.debug("Creating Neo4j driver...")
     s = get_settings()
     driver = GraphDatabase.driver(s.neo4j_uri, auth=(s.neo4j_user, s.neo4j_password))
@@ -18,7 +25,11 @@ def create_driver() -> Driver:
 
 
 def close_driver(driver: Driver) -> None:
-    """Close the Neo4j driver connection."""
+    """Close the Neo4j driver connection.
+
+    A no-op when *driver* is ``None`` (e.g. if startup failed before the
+    driver was created).
+    """
     if driver is not None:
         logger.debug("Closing Neo4j driver...")
         driver.close()
@@ -26,7 +37,11 @@ def close_driver(driver: Driver) -> None:
 
 
 def ensure_constraints(driver: Driver) -> None:
-    """Create necessary Neo4j constraints."""
+    """Create uniqueness constraints for BeamLine, LineItem, and Item names.
+
+    Uses ``IF NOT EXISTS`` so the operation is idempotent and safe to call on
+    every application startup.
+    """
     logger.debug("Ensuring Neo4j constraints...")
     queries = (
         "CREATE CONSTRAINT beamline_name_unique IF NOT EXISTS "
@@ -43,7 +58,16 @@ def ensure_constraints(driver: Driver) -> None:
 
 
 def run_query(driver: Driver, query: str, parameters: dict | None = None) -> list:
-    """Execute a Neo4j query and return results."""
+    """Execute a Cypher query and return all records as a list.
+
+    Opens a new session for each call, runs *query* with optional
+    *parameters*, and eagerly collects all results before closing the session.
+
+    :param driver: Active Neo4j driver instance.
+    :param query: Cypher query string.
+    :param parameters: Optional mapping of query parameter names to values.
+    :returns: List of ``neo4j.Record`` objects (empty list when no rows match).
+    """
     logger.debug(
         f"Executing query: {query[:100]}..."
         if len(query) > 100
@@ -59,7 +83,11 @@ def run_query(driver: Driver, query: str, parameters: dict | None = None) -> lis
 
 
 def find_by_id(driver: Driver, item_id: int) -> dict | None:
-    """Find a beam line by ID."""
+    """Find a BeamLine node by its integer ID.
+
+    Returns a plain ``dict`` with keys ``id``, ``name``, and ``description``
+    when the node is found, or ``None`` when no matching BeamLine exists.
+    """
     logger.debug(f"Finding beam line by ID: {item_id}")
     query = "MATCH (b:BeamLine {id: $id}) RETURN b"
     records = run_query(driver, query, {"id": item_id})
@@ -77,7 +105,17 @@ def find_by_id(driver: Driver, item_id: int) -> dict | None:
 
 
 def exists_any_name(driver: Driver, name: str, exclude_id: int | None = None) -> bool:
-    """Check whether a beam line, line item, or item name exists."""
+    """Return ``True`` if any BeamLine, LineItem, or Item node shares *name*.
+
+    The comparison is case-insensitive.  Pass *exclude_id* to skip the node
+    that owns that ID (useful when validating a rename that keeps the same
+    name on the same node).
+
+    :param driver: Active Neo4j driver instance.
+    :param name: Name to look up (case-insensitive).
+    :param exclude_id: Node ID to exclude from the search, or ``None``.
+    :returns: ``True`` if a matching node is found, ``False`` otherwise.
+    """
     logger.debug(
         f"Checking if item name exists: {name}"
         + (f" (excluding ID: {exclude_id})" if exclude_id else "")
