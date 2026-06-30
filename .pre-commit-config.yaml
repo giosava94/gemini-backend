@@ -15,6 +15,7 @@ repos:
     hooks:
       - id: check-yaml
         name: Check YAML
+        args: [--allow-multiple-documents]
 
   # Poetry lock export to requirements.txt
   - repo: local
