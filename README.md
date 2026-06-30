@@ -111,7 +111,7 @@ All endpoints are prefixed with `/api/v1`.
 ## Data Models
 
 ### LineItem kinds
-`Diagnostic`, `ES_Triplet`, `ES_Steerer`, `ES_Dipole`, `ES_Quadrupole`, `ES_Multipole`, `MG_Triplet`, `MG_Steerer`, `MG_Lens`, `Valve_Gate`
+`Diagnostic`, `ES Triplet`, `ES Steerer`, `ES Dipole`, `ES Quadrupole`, `ES Multipole`, `MG Triplet`, `MG Steerer`, `MG Dipole`, `MG Solenoid`, `Valve Gate`, `High Energy Buncher`, `Low Energy Buncher`, `Radiofrequency Quadrupole`, `Cryostat`, `Charge Breeder`, `Beam Cooler`, `Tape Station`, `Ion Source`, `Target Ion Source`, `Wien Filter`
 
 ### LineItem statuses
 `0` = Enabled, `1` = Disabled, `2` = Maintenance
