@@ -94,6 +94,10 @@ class LineItemUpdate(BaseModel):
         LineItemStatus | None,
         Field(None, description="Updated line item status"),
     ] = None
+    kind: Annotated[
+        LineItemKind | None,
+        Field(None, description="Updated line item kind"),
+    ] = None
 
 
 class LineItemCreateResponse(BaseModel):

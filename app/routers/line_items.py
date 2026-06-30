@@ -361,6 +361,9 @@ def patch_line_item(
     if payload.status is not None:
         update_clauses.append("li.status = $status")
         parameters["status"] = payload.status.value
+    if payload.kind is not None:
+        update_clauses.append("li.kind = $kind")
+        parameters["kind"] = payload.kind.value
 
     if not update_clauses:
         return None

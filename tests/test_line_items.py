@@ -268,6 +268,18 @@ class TestPatchLineItem:
             )
         assert r.status_code == 204
 
+    def test_patch_kind(self, client, admin_headers):
+        with (
+            patch("app.routers.line_items.exists_any_name", return_value=False),
+            patch("app.routers.line_items.run_query", return_value=[{"id": 10}]),
+        ):
+            r = client.patch(
+                f"{BASE}/10",
+                json={"kind": "Diagnostic"},
+                headers=admin_headers,
+            )
+        assert r.status_code == 204
+
 
 # ---------------------------------------------------------------------------
 # DELETE /api/v1/beam-lines/{beam_id}/line-items/{item_id}
