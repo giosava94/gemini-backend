@@ -62,6 +62,10 @@ class LineItemCreate(BaseModel):
         list[int],
         Field(default_factory=list),
     ]
+    labels: Annotated[
+        list[str],
+        Field(default_factory=list, description="Optional list of labels"),
+    ]
 
     @field_validator("kind", mode="before")
     @classmethod
@@ -97,6 +101,10 @@ class LineItemUpdate(BaseModel):
     kind: Annotated[
         LineItemKind | None,
         Field(None, description="Updated line item kind"),
+    ] = None
+    labels: Annotated[
+        list[str] | None,
+        Field(None, description="Updated list of labels"),
     ] = None
 
 
@@ -134,6 +142,10 @@ class LineItemDetailData(LineItemData):
 
     kind: Annotated[LineItemKind, Field(..., description="Line item kind")]
     status: Annotated[LineItemStatus, Field(..., description="Line item status")]
+    labels: Annotated[
+        list[str],
+        Field(default_factory=list, description="List of labels"),
+    ]
 
 
 class LineItemLinksModel(BaseModel):

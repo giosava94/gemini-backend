@@ -79,7 +79,7 @@ def create_item(
         "WITH c.value AS nextId "
         "CREATE (i:Item {"
         "id: nextId, name: $name, description: $description, "
-        "kind: $kind, status: $status"
+        "kind: $kind, status: $status, labels: $labels"
         "}) "
         "WITH i "
         "CALL (i) { "
@@ -98,6 +98,7 @@ def create_item(
             "description": payload.description,
             "kind": payload.kind.value,
             "status": payload.status.value,
+            "labels": payload.labels,
             "connections": list(set(payload.connections)),
         },
     )
@@ -201,6 +202,7 @@ def get_item(
         description=item.get("description"),
         kind=item["kind"],
         status=item["status"],
+        labels=item.get("labels", []),
     )
     return {
         "links": {"connections": f"/api/v1/items/{item_id}/connections"},
@@ -241,6 +243,9 @@ def patch_item(
     if payload.status is not None:
         update_clauses.append("i.status = $status")
         parameters["status"] = payload.status.value
+    if payload.labels is not None:
+        update_clauses.append("i.labels = $labels")
+        parameters["labels"] = payload.labels
 
     if not update_clauses:
         return None

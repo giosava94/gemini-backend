@@ -46,6 +46,10 @@ class ItemCreate(BaseModel):
         list[int],
         Field(default_factory=list, description="IDs of items to connect to"),
     ]
+    labels: Annotated[
+        list[str],
+        Field(default_factory=list, description="Optional list of labels"),
+    ]
 
     @field_validator("kind", mode="before")
     @classmethod
@@ -77,6 +81,10 @@ class ItemUpdate(BaseModel):
     status: Annotated[
         ItemStatus | None,
         Field(None, description="Updated item status"),
+    ] = None
+    labels: Annotated[
+        list[str] | None,
+        Field(None, description="Updated list of labels"),
     ] = None
 
 
@@ -114,6 +122,10 @@ class ItemDetailData(ItemData):
 
     kind: Annotated[ItemKind, Field(..., description="Item kind")]
     status: Annotated[ItemStatus, Field(..., description="Item status")]
+    labels: Annotated[
+        list[str],
+        Field(default_factory=list, description="List of labels"),
+    ]
 
 
 class ItemLinksModel(BaseModel):

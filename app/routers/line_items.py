@@ -139,7 +139,7 @@ def create_line_item(
         "WITH beam, c.value AS nextId "
         "CREATE (li:LineItem {"
         "id: nextId, name: $name, description: $description, "
-        "kind: $kind, status: $status"
+        "kind: $kind, status: $status, labels: $labels"
         "}) "
         "CREATE (beam)-[:HAS_LINE_ITEM]->(li) "
         "WITH li "
@@ -173,6 +173,7 @@ def create_line_item(
             "description": payload.description,
             "kind": payload.kind.value,
             "status": payload.status.value,
+            "labels": payload.labels,
             "adjacents": adjacents,
             "connections": list(set(connection_ids)),
         },
@@ -323,6 +324,7 @@ def get_line_item(
         description=item.get("description"),
         kind=item["kind"],
         status=item["status"],
+        labels=item.get("labels", []),
     )
     return {"links": links, "data": data}
 
@@ -364,6 +366,9 @@ def patch_line_item(
     if payload.kind is not None:
         update_clauses.append("li.kind = $kind")
         parameters["kind"] = payload.kind.value
+    if payload.labels is not None:
+        update_clauses.append("li.labels = $labels")
+        parameters["labels"] = payload.labels
 
     if not update_clauses:
         return None
