@@ -13,15 +13,17 @@ VALID_PAYLOAD = {
 }
 
 
-def _make_item_record(iid, name, kind="Rack", status=0, desc=None):
+def _make_item_record(iid, name, kind="Rack", status=0, desc=None, labels=None):
+    labels = labels if labels is not None else []
     node = MagicMock()
     node.__getitem__ = lambda s, k: {
         "id": iid,
         "name": name,
         "kind": kind,
         "status": status,
+        "labels": labels,
     }[k]
-    node.get = lambda k, d=None: desc if k == "description" else d
+    node.get = lambda k, d=None: {"description": desc, "labels": labels}.get(k, d)
     return {"i": node}
 
 
@@ -76,6 +78,19 @@ class TestCreateItem:
     def test_create_empty_name_rejected(self, client, admin_headers):
         r = client.post(BASE, json={**VALID_PAYLOAD, "name": ""}, headers=admin_headers)
         assert r.status_code == 422
+
+    def test_create_with_labels(self, client, admin_headers):
+        payload = {**VALID_PAYLOAD, "labels": ["rack", "service"]}
+        with (
+            patch("app.routers.items.exists_any_name", return_value=False),
+            patch("app.routers.items.run_query") as run_query_mock,
+        ):
+            run_query_mock.return_value = [{"id": 42}]
+            r = client.post(BASE, json=payload, headers=admin_headers)
+
+        assert r.status_code == 201
+        assert r.json() == {"id": 42}
+        assert run_query_mock.call_args[0][2]["labels"] == ["rack", "service"]
 
     def test_create_with_connections_success(self, client, admin_headers):
         with (
@@ -191,6 +206,13 @@ class TestGetItem:
         assert body["data"]["id"] == 42
         assert "connections" in body["links"]
 
+    def test_get_returns_labels(self, client):
+        record = _make_item_record(42, "RACK-01", labels=["rack", "service"])
+        with patch("app.routers.items.run_query", return_value=[record]):
+            r = client.get(f"{BASE}/42")
+        assert r.status_code == 200
+        assert r.json()["data"]["labels"] == ["rack", "service"]
+
     def test_get_not_found(self, client):
         with patch("app.routers.items.run_query", return_value=[]):
             r = client.get(f"{BASE}/999")
@@ -250,6 +272,18 @@ class TestPatchItem:
             r = client.patch(
                 f"{BASE}/42",
                 json={"description": "updated"},
+                headers=admin_headers,
+            )
+        assert r.status_code == 204
+
+    def test_patch_labels(self, client, admin_headers):
+        with (
+            patch("app.routers.items.exists_any_name", return_value=False),
+            patch("app.routers.items.run_query", return_value=[{"id": 42}]),
+        ):
+            r = client.patch(
+                f"{BASE}/42",
+                json={"labels": ["rack", "service"]},
                 headers=admin_headers,
             )
         assert r.status_code == 204

@@ -14,16 +14,25 @@ VALID_PAYLOAD = {
 }
 
 
-def _make_li_record(lid, name, kind="Diagnostic", status=0, desc=None):
+def _make_li_record(
+    lid,
+    name,
+    kind="Diagnostic",
+    status=0,
+    desc=None,
+    labels=None,
+):
     """Build a fake Neo4j record dict for a LineItem node."""
+    labels = labels if labels is not None else []
     node = MagicMock()
     node.__getitem__ = lambda s, k: {
         "id": lid,
         "name": name,
         "kind": kind,
         "status": status,
+        "labels": labels,
     }[k]
-    node.get = lambda k, d=None: desc if k == "description" else d
+    node.get = lambda k, d=None: {"description": desc, "labels": labels}.get(k, d)
     return {"li": node}
 
 
@@ -112,6 +121,23 @@ class TestCreateLineItem:
             headers=admin_headers,
         )
         assert r.status_code == 422
+
+    def test_create_with_labels(self, client, admin_headers):
+        payload = {**VALID_PAYLOAD, "labels": ["magnet", "critical"]}
+        with (
+            patch("app.routers.line_items.exists_any_name", return_value=False),
+            patch("app.routers.line_items.run_query") as run_query_mock,
+        ):
+            run_query_mock.side_effect = [[{"id": 1}], [{"id": 42}]]
+            r = client.post(BASE, json=payload, headers=admin_headers)
+
+        assert r.status_code == 201
+        assert r.json() == {"id": 42}
+        assert run_query_mock.call_count == 2
+        assert run_query_mock.call_args_list[1][0][2]["labels"] == [
+            "magnet",
+            "critical",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +233,13 @@ class TestGetLineItem:
         assert "adjacents" in body["links"]
         assert "connections" in body["links"]
 
+    def test_get_returns_labels(self, client):
+        record = _make_li_record(10, "QD01", labels=["magnet", "critical"])
+        with patch("app.routers.line_items.run_query", return_value=[record]):
+            r = client.get(f"{BASE}/10")
+        assert r.status_code == 200
+        assert r.json()["data"]["labels"] == ["magnet", "critical"]
+
     def test_get_not_found(self, client):
         with patch("app.routers.line_items.run_query", return_value=[]):
             r = client.get(f"{BASE}/999")
@@ -276,6 +309,18 @@ class TestPatchLineItem:
             r = client.patch(
                 f"{BASE}/10",
                 json={"kind": "Diagnostic"},
+                headers=admin_headers,
+            )
+        assert r.status_code == 204
+
+    def test_patch_labels(self, client, admin_headers):
+        with (
+            patch("app.routers.line_items.exists_any_name", return_value=False),
+            patch("app.routers.line_items.run_query", return_value=[{"id": 10}]),
+        ):
+            r = client.patch(
+                f"{BASE}/10",
+                json={"labels": ["alignment", "high-priority"]},
                 headers=admin_headers,
             )
         assert r.status_code == 204
