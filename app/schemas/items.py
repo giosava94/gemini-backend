@@ -50,6 +50,10 @@ class ItemCreate(BaseModel):
         list[str],
         Field(default_factory=list, description="Optional list of labels"),
     ]
+    aliases: Annotated[
+        list[str],
+        Field(default_factory=list, description="Optional list of aliases"),
+    ]
 
     @field_validator("kind", mode="before")
     @classmethod
@@ -85,6 +89,10 @@ class ItemUpdate(BaseModel):
     labels: Annotated[
         list[str] | None,
         Field(None, description="Updated list of labels"),
+    ] = None
+    aliases: Annotated[
+        list[str] | None,
+        Field(None, description="Updated list of aliases"),
     ] = None
 
 
@@ -125,6 +133,10 @@ class ItemDetailData(ItemData):
     labels: Annotated[
         list[str],
         Field(default_factory=list, description="List of labels"),
+    ]
+    aliases: Annotated[
+        list[str],
+        Field(default_factory=list, description="List of aliases"),
     ]
 
 

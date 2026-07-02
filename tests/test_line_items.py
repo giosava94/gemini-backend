@@ -139,6 +139,23 @@ class TestCreateLineItem:
             "critical",
         ]
 
+    def test_create_with_aliases(self, client, admin_headers):
+        payload = {**VALID_PAYLOAD, "aliases": ["QD01-A", "Quad01"]}
+        with (
+            patch("app.routers.line_items.exists_any_name", return_value=False),
+            patch("app.routers.line_items.run_query") as run_query_mock,
+        ):
+            run_query_mock.side_effect = [[{"id": 1}], [{"id": 42}]]
+            r = client.post(BASE, json=payload, headers=admin_headers)
+
+        assert r.status_code == 201
+        assert r.json() == {"id": 42}
+        assert run_query_mock.call_count == 2
+        assert run_query_mock.call_args_list[1][0][2]["aliases"] == [
+            "QD01-A",
+            "Quad01",
+        ]
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/beam-lines/{beam_id}/line-items
@@ -216,6 +233,18 @@ class TestListLineItems:
             r = client.get(f"{BASE}?status=0")
         assert r.status_code == 200
 
+    def test_list_alias_filter(self, client):
+        with patch(
+            "app.routers.line_items.run_query",
+            side_effect=[
+                [{"id": 1}],
+                [{"total": 0}],
+                [],
+            ],
+        ):
+            r = client.get(f"{BASE}?alias=quad")
+        assert r.status_code == 200
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/beam-lines/{beam_id}/line-items/{item_id}
@@ -239,6 +268,27 @@ class TestGetLineItem:
             r = client.get(f"{BASE}/10")
         assert r.status_code == 200
         assert r.json()["data"]["labels"] == ["magnet", "critical"]
+
+    def test_get_returns_aliases(self, client):
+        node = MagicMock()
+        node.__getitem__ = lambda s, k: {
+            "id": 10,
+            "name": "QD01",
+            "kind": "Diagnostic",
+            "status": 0,
+            "labels": [],
+            "aliases": ["Q-01", "Quad01"],
+        }[k]
+        node.get = lambda k, d=None: {
+            "description": None,
+            "labels": [],
+            "aliases": ["Q-01", "Quad01"],
+        }.get(k, d)
+        record = {"li": node}
+        with patch("app.routers.line_items.run_query", return_value=[record]):
+            r = client.get(f"{BASE}/10")
+        assert r.status_code == 200
+        assert r.json()["data"]["aliases"] == ["Q-01", "Quad01"]
 
     def test_get_not_found(self, client):
         with patch("app.routers.line_items.run_query", return_value=[]):
@@ -321,6 +371,18 @@ class TestPatchLineItem:
             r = client.patch(
                 f"{BASE}/10",
                 json={"labels": ["alignment", "high-priority"]},
+                headers=admin_headers,
+            )
+        assert r.status_code == 204
+
+    def test_patch_aliases(self, client, admin_headers):
+        with (
+            patch("app.routers.line_items.exists_any_name", return_value=False),
+            patch("app.routers.line_items.run_query", return_value=[{"id": 10}]),
+        ):
+            r = client.patch(
+                f"{BASE}/10",
+                json={"aliases": ["Q-01-A", "QuadA"]},
                 headers=admin_headers,
             )
         assert r.status_code == 204

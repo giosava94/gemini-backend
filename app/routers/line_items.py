@@ -139,7 +139,7 @@ def create_line_item(
         "WITH beam, c.value AS nextId "
         "CREATE (li:LineItem {"
         "id: nextId, name: $name, description: $description, "
-        "kind: $kind, status: $status, labels: $labels"
+        "kind: $kind, status: $status, labels: $labels, aliases: $aliases"
         "}) "
         "CREATE (beam)-[:HAS_LINE_ITEM]->(li) "
         "WITH li "
@@ -174,6 +174,7 @@ def create_line_item(
             "kind": payload.kind.value,
             "status": payload.status.value,
             "labels": payload.labels,
+            "aliases": payload.aliases,
             "adjacents": adjacents,
             "connections": list(set(connection_ids)),
         },
@@ -190,6 +191,7 @@ def list_line_items(
     per_page: Annotated[int, Query(..., ge=1, le=100)] = 10,
     sort: Annotated[list[str] | None, Query(...)] = None,
     name: Annotated[str | None, Query(...)] = None,
+    alias: Annotated[str | None, Query(...)] = None,
     kind: Annotated[str | None, Query(...)] = None,
     status: Annotated[LineItemStatus | None, Query(...)] = None,
     driver: Driver = Depends(get_driver),
@@ -237,12 +239,15 @@ def list_line_items(
     where_clause = (
         "WHERE ($status IS NULL OR li.status = $status) "
         "AND ($name IS NULL OR toLower(li.name) CONTAINS toLower($name)) "
+        "AND ($alias IS NULL OR ANY(alias IN coalesce(li.aliases, []) "
+        "WHERE toLower(alias) CONTAINS toLower($alias))) "
         "AND ($kind IS NULL OR li.kind = $kind)"
     )
     parameters = {
         "beam_id": beam_id,
         "status": status.value if status else None,
         "name": name,
+        "alias": alias,
         "kind": normalized_kind.value if normalized_kind else None,
     }
     count_query = (
@@ -325,6 +330,7 @@ def get_line_item(
         kind=item["kind"],
         status=item["status"],
         labels=item.get("labels", []),
+        aliases=item.get("aliases", []),
     )
     return {"links": links, "data": data}
 
@@ -369,6 +375,9 @@ def patch_line_item(
     if payload.labels is not None:
         update_clauses.append("li.labels = $labels")
         parameters["labels"] = payload.labels
+    if payload.aliases is not None:
+        update_clauses.append("li.aliases = $aliases")
+        parameters["aliases"] = payload.aliases
 
     if not update_clauses:
         return None

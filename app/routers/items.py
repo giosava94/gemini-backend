@@ -79,7 +79,7 @@ def create_item(
         "WITH c.value AS nextId "
         "CREATE (i:Item {"
         "id: nextId, name: $name, description: $description, "
-        "kind: $kind, status: $status, labels: $labels"
+        "kind: $kind, status: $status, labels: $labels, aliases: $aliases"
         "}) "
         "WITH i "
         "CALL (i) { "
@@ -99,6 +99,7 @@ def create_item(
             "kind": payload.kind.value,
             "status": payload.status.value,
             "labels": payload.labels,
+            "aliases": payload.aliases,
             "connections": list(set(payload.connections)),
         },
     )
@@ -113,6 +114,7 @@ def list_items(
     per_page: Annotated[int, Query(..., ge=1, le=100)] = 10,
     sort: Annotated[list[str] | None, Query(...)] = None,
     name: Annotated[str | None, Query(...)] = None,
+    alias: Annotated[str | None, Query(...)] = None,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
@@ -137,8 +139,12 @@ def list_items(
                     detail=f"Invalid sort key: {key}. Valid values: name, kind",
                 )
 
-    where_clause = "WHERE ($name IS NULL OR toLower(i.name) CONTAINS toLower($name)) "
-    parameters: dict = {"name": name}
+    where_clause = (
+        "WHERE ($name IS NULL OR toLower(i.name) CONTAINS toLower($name)) "
+        "AND ($alias IS NULL OR ANY(alias IN coalesce(i.aliases, []) "
+        "WHERE toLower(alias) CONTAINS toLower($alias))) "
+    )
+    parameters: dict = {"name": name, "alias": alias}
 
     count_query = f"MATCH (i:Item) {where_clause} RETURN count(i) AS total"
     total_records = run_query(driver, count_query, parameters)
@@ -203,6 +209,7 @@ def get_item(
         kind=item["kind"],
         status=item["status"],
         labels=item.get("labels", []),
+        aliases=item.get("aliases", []),
     )
     return {
         "links": {"connections": f"/api/v1/items/{item_id}/connections"},
@@ -246,6 +253,9 @@ def patch_item(
     if payload.labels is not None:
         update_clauses.append("i.labels = $labels")
         parameters["labels"] = payload.labels
+    if payload.aliases is not None:
+        update_clauses.append("i.aliases = $aliases")
+        parameters["aliases"] = payload.aliases
 
     if not update_clauses:
         return None

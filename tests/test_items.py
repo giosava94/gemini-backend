@@ -92,6 +92,19 @@ class TestCreateItem:
         assert r.json() == {"id": 42}
         assert run_query_mock.call_args[0][2]["labels"] == ["rack", "service"]
 
+    def test_create_with_aliases(self, client, admin_headers):
+        payload = {**VALID_PAYLOAD, "aliases": ["RACK-01-A", "RACK-GROUP"]}
+        with (
+            patch("app.routers.items.exists_any_name", return_value=False),
+            patch("app.routers.items.run_query") as run_query_mock,
+        ):
+            run_query_mock.return_value = [{"id": 42}]
+            r = client.post(BASE, json=payload, headers=admin_headers)
+
+        assert r.status_code == 201
+        assert r.json() == {"id": 42}
+        assert run_query_mock.call_args[0][2]["aliases"] == ["RACK-01-A", "RACK-GROUP"]
+
     def test_create_with_connections_success(self, client, admin_headers):
         with (
             patch("app.routers.items.exists_any_name", return_value=False),
@@ -176,6 +189,17 @@ class TestListItems:
             r = client.get(f"{BASE}?name=rack")
         assert r.status_code == 200
 
+    def test_list_alias_filter(self, client):
+        with patch(
+            "app.routers.items.run_query",
+            side_effect=[
+                [{"total": 0}],
+                [],
+            ],
+        ):
+            r = client.get(f"{BASE}?alias=rack")
+        assert r.status_code == 200
+
     def test_list_pagination(self, client):
         with patch(
             "app.routers.items.run_query",
@@ -212,6 +236,27 @@ class TestGetItem:
             r = client.get(f"{BASE}/42")
         assert r.status_code == 200
         assert r.json()["data"]["labels"] == ["rack", "service"]
+
+    def test_get_returns_aliases(self, client):
+        node = MagicMock()
+        node.__getitem__ = lambda s, k: {
+            "id": 42,
+            "name": "RACK-01",
+            "kind": "Rack",
+            "status": 0,
+            "labels": [],
+            "aliases": ["R-1", "RackOne"],
+        }[k]
+        node.get = lambda k, d=None: {
+            "description": None,
+            "labels": [],
+            "aliases": ["R-1", "RackOne"],
+        }.get(k, d)
+        record = {"i": node}
+        with patch("app.routers.items.run_query", return_value=[record]):
+            r = client.get(f"{BASE}/42")
+        assert r.status_code == 200
+        assert r.json()["data"]["aliases"] == ["R-1", "RackOne"]
 
     def test_get_not_found(self, client):
         with patch("app.routers.items.run_query", return_value=[]):
@@ -284,6 +329,18 @@ class TestPatchItem:
             r = client.patch(
                 f"{BASE}/42",
                 json={"labels": ["rack", "service"]},
+                headers=admin_headers,
+            )
+        assert r.status_code == 204
+
+    def test_patch_aliases(self, client, admin_headers):
+        with (
+            patch("app.routers.items.exists_any_name", return_value=False),
+            patch("app.routers.items.run_query", return_value=[{"id": 42}]),
+        ):
+            r = client.patch(
+                f"{BASE}/42",
+                json={"aliases": ["R-1", "RackOneUpdated"]},
                 headers=admin_headers,
             )
         assert r.status_code == 204
