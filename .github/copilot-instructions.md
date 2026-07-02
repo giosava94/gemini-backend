@@ -88,3 +88,67 @@ Interactive API docs are available at:
 ```
 http://127.0.0.1:8000/docs
 ```
+
+## Documentation policy
+
+Whenever you modify code, determine whether the change affects:
+
+- public APIs
+- behavior
+- configuration
+- architecture
+- examples
+- developer workflow
+
+If yes, update the relevant documentation in the same change.
+
+Documentation includes:
+
+- **/*.md
+- architecture documents
+- ADRs
+- examples
+- comments that describe behavior
+
+Never leave documentation inconsistent with the implementation.
+
+### Python docstrings
+
+Whenever modifying Python code:
+
+- Keep all public functions documented.
+- Keep all public classes documented.
+- Update existing docstrings when behavior changes.
+- Add missing docstrings for new public APIs.
+- Keep parameter descriptions synchronized with function signatures.
+- Keep return values and raised exceptions documented.
+
+Use Google-style docstrings.
+
+Example:
+
+```python
+def resize_image(path: str, width: int) -> Image:
+    """Resize an image.
+
+    Args:
+        path: Path to the image.
+        width: Desired width in pixels.
+
+    Returns:
+        The resized image.
+
+    Raises:
+        FileNotFoundError:
+            If the image does not exist.
+    """
+```
+
+## Definition of Done
+
+A task is not complete until:
+
+- implementation is finished
+- tests are updated
+- documentation is updated
+- docstrings are updated
