@@ -17,6 +17,7 @@ class LineItemKind(str, Enum):
     MG_STEERER = "MG Steerer"
     MG_DIPOLE = "MG Dipole"
     MG_SOLENOID = "MG Solenoid"
+    MG_QUADRUPOLE = "MG Quadrupole"
     VALVE_GATE = "Valve Gate"
     HIGH_ENERGY_BUNCHER = "High Energy Buncher"
     LOW_ENERGY_BUNCHER = "Low Energy Buncher"
@@ -33,8 +34,8 @@ class LineItemKind(str, Enum):
 class LineItemStatus(IntEnum):
     """Allowed line item statuses."""
 
-    ENABLED = 0
-    DISABLED = 1
+    DISABLED = 0
+    ENABLED = 1
     MAINTENANCE = 2
 
 
