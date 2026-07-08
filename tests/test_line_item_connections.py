@@ -1,12 +1,13 @@
 """Tests for the line-item connections endpoints."""
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 
 BASE = "/api/v1/beam-lines/1/line-items/10/connections"
 
 
-def _conn_record(cid, name, desc=None):
+def _conn_record(cid, name, desc=None) -> dict[str, Any]:
     node = MagicMock()
     node.__getitem__ = lambda s, k: {"id": cid, "name": name}[k]
     node.get = lambda k, d=None: desc if k == "description" else d
@@ -21,6 +22,7 @@ def _conn_record(cid, name, desc=None):
 class TestListLineItemConnections:
     def test_list_success(self, client):
         record = _conn_record(30, "RACK-01")
+        record["rel_props"] = {"kind": "line", "position": 1}
         with patch(
             "app.routers.line_item_connections.run_query",
             side_effect=[
@@ -35,6 +37,7 @@ class TestListLineItemConnections:
         assert body["total"] == 1
         assert body["data"][0]["id"] == 30
         assert body["data"][0]["link"] == "/api/v1/items/30"
+        assert body["data"][0]["properties"] == {"kind": "line", "position": 1}
 
     def test_list_item_not_found(self, client):
         with patch("app.routers.line_item_connections.run_query", return_value=[]):
@@ -85,16 +88,54 @@ class TestPutLineItemConnections:
                 [],  # merge
             ],
         ):
-            r = client.put(BASE, json={"items": [30]}, headers=admin_headers)
+            r = client.put(
+                BASE,
+                json={"items": [{"id": 30, "properties": {}}]},
+                headers=admin_headers,
+            )
         assert r.status_code == 201
 
+    def test_put_accepts_connection_properties(self, client, admin_headers):
+        with patch(
+            "app.routers.line_item_connections.run_query",
+            side_effect=[
+                [{"id": 10}],
+                [{"all_exist": True}],
+                [],
+            ],
+        ) as run_query_mock:
+            r = client.put(
+                BASE,
+                json={
+                    "items": [{"id": 30, "properties": {"kind": "line", "position": 2}}]
+                },
+                headers=admin_headers,
+            )
+        assert r.status_code == 201
+        assert run_query_mock.call_args_list[-1].args[2]["connections"] == [
+            {"id": 30, "properties": {"kind": "line", "position": 2}}
+        ]
+
     def test_put_duplicate_items(self, client, admin_headers):
-        r = client.put(BASE, json={"items": [30, 30]}, headers=admin_headers)
+        r = client.put(
+            BASE,
+            json={
+                "items": [
+                    {"id": 30, "properties": {}},
+                    {"id": 30, "properties": {}},
+                ]
+            },
+            headers=admin_headers,
+        )
         assert r.status_code == 400
 
     def test_put_line_item_not_found(self, client, admin_headers):
         with patch("app.routers.line_item_connections.run_query", return_value=[]):
-            r = client.put(BASE, json={"items": [30]}, headers=admin_headers)
+            r = client.put(
+                BASE,
+                json={"items": [{"id": 30, "properties": {}}]},
+                headers=admin_headers,
+            )
         assert r.status_code == 404
 
     def test_put_target_not_found(self, client, admin_headers):
@@ -105,7 +146,11 @@ class TestPutLineItemConnections:
                 [{"all_exist": False}],
             ],
         ):
-            r = client.put(BASE, json={"items": [999]}, headers=admin_headers)
+            r = client.put(
+                BASE,
+                json={"items": [{"id": 999, "properties": {}}]},
+                headers=admin_headers,
+            )
         assert r.status_code == 404
 
 

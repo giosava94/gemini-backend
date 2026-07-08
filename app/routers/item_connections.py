@@ -27,13 +27,20 @@ def put_item_connections(
     logger: logging.Logger = Depends(get_logger),
     # _token: str = Depends(require_admin),
 ):
-    """Add one or multiple line or non-line items to the current non-line item."""
-    logger.info(f"Adding connections to item {item_id}: {payload.items}")
+    """Add one or multiple non-line items to the current non-line item."""
+    logger.info(
+        f"Adding connections to item {item_id}: {[item.id for item in payload.items]}"
+    )
 
-    if len(payload.items) != len(set(payload.items)):
+    connections = [
+        {"id": item.id, "properties": item.properties} for item in payload.items
+    ]
+    target_ids = [connection["id"] for connection in connections]
+
+    if len(target_ids) != len(set(target_ids)):
         raise HTTPException(status_code=400, detail="Duplicated items in the list")
 
-    if item_id in payload.items:
+    if item_id in target_ids:
         raise HTTPException(
             status_code=400,
             detail="An item cannot be connected to itself",
@@ -50,12 +57,11 @@ def put_item_connections(
             detail="Current item or at least one of the linked items do not exist",
         )
 
-    target_ids = list(set(payload.items))
     target_records = run_query(
         driver,
         (
             "UNWIND $ids AS id "
-            "OPTIONAL MATCH (n) WHERE (n:Item OR n:LineItem) AND n.id = id "
+            "OPTIONAL MATCH (n) WHERE (n:Item) AND n.id = id "
             "RETURN count(n) = size($ids) AS all_exist"
         ),
         {"ids": target_ids},
@@ -70,11 +76,12 @@ def put_item_connections(
         driver,
         (
             "MATCH (current:Item {id: $id}) "
-            "UNWIND $target_ids AS target_id "
-            "MATCH (target) WHERE (target:Item OR target:LineItem) AND target.id = target_id "
-            "MERGE (current)-[:CONNECTED_TO]->(target)"
+            "UNWIND $connections AS connection "
+            "MATCH (target:Item {id: connection.id}) "
+            "MERGE (current)-[rel:CONNECTED_TO]-(target) "
+            "SET rel = connection.properties"
         ),
-        {"id": item_id, "target_ids": target_ids},
+        {"id": item_id, "connections": connections},
     )
     return None
 
@@ -87,7 +94,7 @@ def list_item_connections(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
 ):
-    """Retrieve the list of connected line or non-line items of the current item."""
+    """Retrieve the list of connected non-line items of the current item."""
     logger.info(
         f"Listing connections for item {item_id} - page: {page}, per_page: {per_page}"
     )
@@ -101,8 +108,8 @@ def list_item_connections(
         raise HTTPException(status_code=404, detail="Current item does not exist")
 
     count_query = (
-        "MATCH (i:Item {id: $id})-[:CONNECTED_TO]->(conn) "
-        "WHERE conn:Item OR conn:LineItem "
+        "MATCH (i:Item {id: $id})-[:CONNECTED_TO]-(conn) "
+        "WHERE conn:Item "
         "RETURN count(conn) AS total"
     )
     total_records = run_query(driver, count_query, {"id": item_id})
@@ -110,9 +117,8 @@ def list_item_connections(
 
     skip = (page - 1) * per_page
     data_query = (
-        "MATCH (i:Item {id: $id})-[:CONNECTED_TO]->(conn) "
-        "WHERE conn:Item OR conn:LineItem "
-        "RETURN conn, labels(conn) AS conn_labels "
+        "MATCH (i:Item {id: $id})-[rel:CONNECTED_TO]-(conn:Item) "
+        "RETURN conn, properties(rel) AS rel_props "
         "SKIP $skip LIMIT $limit"
     )
     records = run_query(
@@ -125,6 +131,7 @@ def list_item_connections(
             id=record["conn"]["id"],
             name=record["conn"]["name"],
             description=record["conn"].get("description"),
+            properties=record.get("rel_props"),
             link=f"/api/v1/items/{record['conn']['id']}",
         )
         for record in records
@@ -140,7 +147,7 @@ def delete_item_connections(
     logger: logging.Logger = Depends(get_logger),
     # _token: str = Depends(require_admin),
 ):
-    """Disconnect one or multiple line or non-line items from the current item."""
+    """Disconnect one or multiple non-line items from the current item."""
     logger.info(f"Disconnecting connections from item {item_id}: {payload.items}")
 
     if len(payload.items) != len(set(payload.items)):
@@ -157,8 +164,8 @@ def delete_item_connections(
     run_query(
         driver,
         (
-            "MATCH (i:Item {id: $id})-[rel:CONNECTED_TO]->(conn) "
-            "WHERE (conn:Item OR conn:LineItem) AND conn.id IN $target_ids "
+            "MATCH (i:Item {id: $id})-[rel:CONNECTED_TO]-(conn:Item) "
+            "WHERE conn.id IN $target_ids "
             "DELETE rel"
         ),
         {"id": item_id, "target_ids": payload.items},

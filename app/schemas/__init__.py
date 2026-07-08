@@ -5,6 +5,7 @@ Schema package — re-exports all public symbols so that existing
 
 from app.schemas.common import (
     NonEmptyStr,
+    NonNestedDict,
     StatusEnum,
     HealthResponse,
 )
@@ -76,6 +77,7 @@ from app.schemas.item_connections import (
 __all__ = [
     # common
     "NonEmptyStr",
+    "NonNestedDict",
     "StatusEnum",
     "HealthResponse",
     # beam lines

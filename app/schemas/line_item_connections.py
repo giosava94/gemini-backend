@@ -1,11 +1,31 @@
-from typing import Annotated
+from typing import Annotated, Any
 from pydantic import BaseModel, Field
+
+from app.schemas.common import NonNestedDict
+
+
+class LineItemConnection(BaseModel):
+    id: Annotated[int, Field(..., description="Connected line item ID")]
+    properties: Annotated[
+        NonNestedDict,
+        Field(
+            default_factory=dict,
+            description="Properties of the connection relationship",
+        ),
+    ]
 
 
 class LineItemConnectionData(BaseModel):
     """Connected non-line item data model."""
 
     id: Annotated[int, Field(..., description="Auto-generated unique item ID")]
+    properties: Annotated[
+        dict[str, Any],
+        Field(
+            default_factory=dict,
+            description="Properties of the connection relationship",
+        ),
+    ]
     name: Annotated[str, Field(..., description="Item name in the map")]
     description: Annotated[
         str | None,
@@ -33,8 +53,8 @@ class LineItemConnectionsUpdate(BaseModel):
     """Request model for adding non-line item connections to a line item."""
 
     items: Annotated[
-        list[int],
-        Field(..., min_length=1, description="List of non-line item IDs to connect"),
+        list[LineItemConnection],
+        Field(..., min_length=1, description="List of non-line item to connect"),
     ]
 
 

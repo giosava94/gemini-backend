@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Annotated, Any
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 from datetime import datetime
 
 
@@ -23,3 +23,13 @@ class HealthResponse(BaseModel):
 
 # Shared type alias used across multiple schema modules
 NonEmptyStr = Annotated[str, Field(min_length=1)]
+
+
+def ensure_no_nested_dicts(value: dict[str, Any]) -> dict[str, Any]:
+    """Validator to ensure that the dictionary does not contain nested dictionaries."""
+    if any(isinstance(v, dict) for v in value.values()):
+        raise ValueError("Nested dictionaries are not allowed in connection properties")
+    return value
+
+
+NonNestedDict = Annotated[dict[str, Any], AfterValidator(ensure_no_nested_dicts)]
