@@ -145,11 +145,9 @@ async def get_beam_line(
 
     # Check Redis
     if redis_client:
+        key = f"beam_line:{beam_id}"
         data = await get_with_lock(
-            redis_client,
-            f"beam_line:{beam_id}",
-            lambda: _retrieve_beam_line(driver, beam_id),
-            logger,
+            redis_client, key, lambda: _retrieve_beam_line(driver, beam_id), logger
         )
     else:
         data = await _retrieve_beam_line(driver, beam_id)
@@ -213,8 +211,9 @@ async def patch_beam_line(
 
     # Invalidate redis cache
     if redis_client:
-        redis_key = f"beam_line:{beam_id}"
-        await invalidate_redis_cache(redis_client, redis_key, logger)
+        key = f"beam_line:{beam_id}"
+        await invalidate_redis_cache(redis_client, key, logger)
+
     return None
 
 
@@ -253,7 +252,7 @@ async def delete_beam_line(
 
     # Invalidate redis cache
     if redis_client:
-        redis_key = f"beam_line:{beam_id}"
-        await invalidate_redis_cache(redis_client, redis_key, logger)
+        key = f"beam_line:{beam_id}"
+        await invalidate_redis_cache(redis_client, key, logger)
 
     return None
