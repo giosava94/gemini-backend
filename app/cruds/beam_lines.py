@@ -71,7 +71,7 @@ async def get_beam_line_record(driver: Driver, beam_id: int) -> dict[str, Any] |
         description=item.get("description"),
     )
     links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
-    return {"links": links, "data": data}
+    return {"links": links, "data": data.model_dump()}
 
 
 def update_beam_line_record(driver: Driver, payload: BeamLineUpdate, beam_id: int):

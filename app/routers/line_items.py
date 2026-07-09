@@ -249,7 +249,7 @@ async def patch_line_item(
     """
     logger.info(f"Updating line item with ID: {item_id} for beam line {beam_id}")
 
-    if not payload.model_dump():
+    if not payload.model_dump(exclude_none=True):
         return None
 
     records = update_line_item_record(driver, payload, beam_id, item_id)

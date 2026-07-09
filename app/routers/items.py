@@ -188,7 +188,7 @@ async def patch_item(
     """
     logger.info(f"Updating item with ID: {item_id}")
 
-    if not payload.model_dump():
+    if not payload.model_dump(exclude_none=True):
         return None
 
     records = update_item_record(driver, payload, item_id)
