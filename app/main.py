@@ -6,12 +6,13 @@ and the application logger.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 import logging
 
 import redis.asyncio as redis
 from app.config import get_settings
 from app.db import create_driver, close_driver, ensure_constraints
+from app.dependencies import get_logger, get_redis_client
 from app.routers.beam_lines import router as beam_line_router
 from app.routers.line_items import router as line_item_router
 from app.routers.line_item_adjacents import router as line_item_adjacents_router
@@ -136,3 +137,33 @@ def get_health(request: Request):
             timestamp=datetime.now(timezone.utc),
         )
     return resp
+
+
+@app.delete("api/v1/cache/pattern/{pattern}")
+async def clear_cache_pattern(
+    pattern: str,
+    redis_client: redis.Redis | None = Depends(get_redis_client),
+    logger: logging.Logger = Depends(get_logger),
+):
+    """
+    Clear all keys matching pattern
+    Example: /cache/pattern/user:* clears all user caches
+    """
+    if not redis_client:
+        logger.warning("Redis not available")
+        raise HTTPException(status_code=405, detail="Redis not available")
+
+    try:
+        keys = []
+        async for key in redis_client.scan_iter(match=pattern):
+            keys.append(key)
+
+        if keys:
+            await redis_client.delete(*keys)
+
+        logger.info(f"Redis keys deleted: {keys}")
+        return {"cleared": len(keys), "pattern": pattern}
+
+    except redis.RedisError as e:
+        logger.error(f"Redis client error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Redis client error")
