@@ -1,8 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+import hashlib
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated
+from typing import Annotated, Any
 import logging
+import redis.asyncio as redis
+from app.config import get_settings
 from app.db import run_query, find_by_id, exists_any_name
+from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     BeamLineCreate,
     BeamLineData,
@@ -10,9 +16,22 @@ from app.schemas import (
     BeamLineListResponse,
     BeamLineUpdate,
 )
-from app.dependencies import get_driver, get_logger
+from app.dependencies import get_driver, get_logger, get_redis_client
 
 router = APIRouter(prefix="/api/v1/beam-lines", tags=["beam-lines"])
+
+
+async def _retrieve_beam_line(driver: Driver, beam_id: int) -> dict[str, Any]:
+    item = find_by_id(driver, beam_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
+    data = {
+        "id": item["id"],
+        "name": item["name"],
+        "description": item.get("description"),
+    }
+    links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
+    return {"links": links, "data": data}
 
 
 @router.post("", status_code=201)
@@ -70,7 +89,7 @@ def list_beam_lines(
     """Return a paginated list of beam lines with optional filtering and sorting.
 
     :param page: 1-based page number.
-    :param per_page: Number of results per page (1–100).
+    :param per_page: Number of results per page (1-100).
     :param sort: Optional list of sort keys; only ``"name"`` is accepted.
     :param name: Optional case-insensitive substring filter on the beam line name.
 
@@ -109,10 +128,12 @@ def list_beam_lines(
 
 
 @router.get("/{beam_id}", response_model=BeamLineDetailResponse)
-def get_beam_line(
+async def get_beam_line(
+    request: Request,
     beam_id: int,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
 ):
     """Retrieve a single beam line by its ID.
 
@@ -121,24 +142,44 @@ def get_beam_line(
     *beam_id* exists.
     """
     logger.info(f"Fetching beam line with ID: {beam_id}")
-    item = find_by_id(driver, beam_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Target item does not exist")
-    links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
-    data = {
-        "id": item["id"],
-        "name": item["name"],
-        "description": item.get("description"),
-    }
-    return {"links": links, "data": data}
+
+    # Check Redis
+    if redis_client:
+        key = f"beam_line:{beam_id}"
+        data = await get_with_lock(
+            redis_client, key, lambda: _retrieve_beam_line(driver, beam_id), logger
+        )
+    else:
+        data = await _retrieve_beam_line(driver, beam_id)
+
+    # HTTP cache headers + ETag
+    data_str = json.dumps(data, sort_keys=True)
+    etag = f'"{hashlib.md5(data_str.encode()).hexdigest()}"'
+
+    # Check if client has current version
+    if request.headers.get("if-none-match") == etag:
+        logger.info(
+            f"Browser's cached value for beam line with ID {beam_id} matches retrieved value"
+        )
+        return Response(status_code=304, headers={"ETag": etag})
+
+    return Response(
+        content=data_str,
+        media_type="application/json",
+        headers={
+            "ETag": etag,
+            "Cache-Control": f"public, max-age={get_settings().browser_cache_exp_time}",
+        },
+    )
 
 
 @router.patch("/{beam_id}", status_code=204)
-def patch_beam_line(
+async def patch_beam_line(
     beam_id: int,
     payload: BeamLineUpdate,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
     # token: Annotated[str, Depends(require_admin)] = Depends(require_admin),
 ):
     """Partially update a beam line's name and/or description.
@@ -167,15 +208,22 @@ def patch_beam_line(
     records = run_query(driver, query, parameters)
     if not records:
         raise HTTPException(status_code=404, detail="Target item does not exist")
+
+    # Invalidate redis cache
+    if redis_client:
+        key = f"beam_line:{beam_id}"
+        await invalidate_redis_cache(redis_client, key, logger)
+
     return None
 
 
 @router.delete("/{beam_id}", status_code=204)
-def delete_beam_line(
+async def delete_beam_line(
     beam_id: int,
     force: Annotated[bool, Query(...)] = False,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
     # token: Annotated[str, Depends(require_admin)] = Depends(require_admin),
 ):
     """Delete a beam line by its ID.
@@ -201,4 +249,10 @@ def delete_beam_line(
             detail="Can't delete an item with line items; set force to true to override",
         )
     run_query(driver, "MATCH (b:BeamLine {id: $id}) DETACH DELETE b", {"id": beam_id})
+
+    # Invalidate redis cache
+    if redis_client:
+        key = f"beam_line:{beam_id}"
+        await invalidate_redis_cache(redis_client, key, logger)
+
     return None

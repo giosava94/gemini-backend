@@ -1,9 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+import hashlib
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated
+from typing import Annotated, Any
 import logging
+import redis.asyncio as redis
+from app.config import get_settings
 from app.db import exists_any_name, run_query
-from app.dependencies import get_driver, get_logger
+from app.dependencies import get_driver, get_logger, get_redis_client
+from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     LINE_ITEM_KIND_LOOKUP,
     LineItemAdjacent,
@@ -18,8 +24,7 @@ from app.schemas import (
 )
 
 router = APIRouter(
-    prefix="/api/v1/beam-lines/{beam_id}/line-items",
-    tags=["line-items"],
+    prefix="/api/v1/beam-lines/{beam_id}/line-items", tags=["line-items"]
 )
 
 
@@ -63,6 +68,38 @@ def _beam_line_exists(driver: Driver, beam_id: int) -> bool:
         {"id": beam_id},
     )
     return bool(records)
+
+
+async def _retrieve_line_item(
+    driver: Driver, beam_id: int, item_id: int
+) -> dict[str, Any]:
+    query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
+        "RETURN li"
+    )
+    records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})
+    if not records:
+        raise HTTPException(
+            status_code=404,
+            detail="Beam line or target item does not exist",
+        )
+
+    item = records[0]["li"]
+    base_url = f"/api/v1/beam-lines/{beam_id}/line-items/{item_id}"
+    links = {
+        "adjacents": f"{base_url}/adjacents",
+        "connections": f"{base_url}/connections",
+    }
+    data = LineItemDetailData(
+        id=item["id"],
+        name=item["name"],
+        description=item.get("description"),
+        kind=item["kind"],
+        status=item["status"],
+        labels=item.get("labels", []),
+        aliases=item.get("aliases", []),
+    )
+    return {"links": links, "data": data.model_dump()}
 
 
 @router.post("", status_code=201, response_model=LineItemCreateResponse)
@@ -293,11 +330,13 @@ def list_line_items(
 
 
 @router.get("/{item_id}", response_model=LineItemDetailResponse)
-def get_line_item(
+async def get_line_item(
+    request: Request,
     beam_id: int,
     item_id: int,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
 ):
     """Retrieve a specific line item under a beam line.
 
@@ -306,42 +345,49 @@ def get_line_item(
     the line item does not exist.
     """
     logger.info(f"Fetching line item with ID: {item_id} for beam line {beam_id}")
-    query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
-        "RETURN li"
-    )
-    records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})
-    if not records:
-        raise HTTPException(
-            status_code=404,
-            detail="Beam line or target item does not exist",
-        )
 
-    item = records[0]["li"]
-    base_url = f"/api/v1/beam-lines/{beam_id}/line-items/{item_id}"
-    links = {
-        "adjacents": f"{base_url}/adjacents",
-        "connections": f"{base_url}/connections",
-    }
-    data = LineItemDetailData(
-        id=item["id"],
-        name=item["name"],
-        description=item.get("description"),
-        kind=item["kind"],
-        status=item["status"],
-        labels=item.get("labels", []),
-        aliases=item.get("aliases", []),
+    # Check Redis
+    if redis_client:
+        key = f"beam_line:{beam_id}:line_item:{item_id}"
+        data = await get_with_lock(
+            redis_client,
+            key,
+            lambda: _retrieve_line_item(driver, beam_id, item_id),
+            logger,
+        )
+    else:
+        data = await _retrieve_line_item(driver, beam_id, item_id)
+
+    # HTTP cache headers + ETag
+    data_str = json.dumps(data, sort_keys=True)
+    etag = f'"{hashlib.md5(data_str.encode()).hexdigest()}"'
+
+    # Check if client has current version
+    if request.headers.get("if-none-match") == etag:
+        logger.info(
+            f"Browser's cached value for line item with ID: {item_id} for "
+            f"beam line {beam_id} matches retrieved value"
+        )
+        return Response(status_code=304, headers={"ETag": etag})
+
+    return Response(
+        content=data_str,
+        media_type="application/json",
+        headers={
+            "ETag": etag,
+            "Cache-Control": f"public, max-age={get_settings().browser_cache_exp_time}",
+        },
     )
-    return {"links": links, "data": data}
 
 
 @router.patch("/{item_id}", status_code=204)
-def patch_line_item(
+async def patch_line_item(
     beam_id: int,
     item_id: int,
     payload: LineItemUpdate,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
     # _token: str = Depends(require_admin),
 ):
     """Partially update a line item's name, description, and/or status.
@@ -394,16 +440,23 @@ def patch_line_item(
             status_code=404,
             detail="Beam line or target item does not exist",
         )
+
+    # Invalidate redis cache
+    if redis_client:
+        key = f"beam_line:{beam_id}:line_item:{item_id}"
+        await invalidate_redis_cache(redis_client, key, logger)
+
     return None
 
 
 @router.delete("/{item_id}", status_code=204)
-def delete_line_item(
+async def delete_line_item(
     beam_id: int,
     item_id: int,
     force: Annotated[bool, Query(...)] = False,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
     # _token: str = Depends(require_admin),
 ):
     """Delete a line item under a beam line by its ID.
@@ -450,4 +503,10 @@ def delete_line_item(
         ),
         {"beam_id": beam_id, "id": item_id},
     )
+
+    # Invalidate redis cache
+    if redis_client:
+        key = f"beam_line:{beam_id}:line_item:{item_id}"
+        await invalidate_redis_cache(redis_client, key, logger)
+
     return None

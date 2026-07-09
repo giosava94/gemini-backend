@@ -1,9 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+import hashlib
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated
+from typing import Annotated, Any
 import logging
+import redis.asyncio as redis
+from app.config import get_settings
 from app.db import exists_any_name, run_query
-from app.dependencies import get_driver, get_logger
+from app.dependencies import get_driver, get_logger, get_redis_client
+from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     ItemCreate,
     ItemCreateResponse,
@@ -14,10 +20,7 @@ from app.schemas import (
     ItemUpdate,
 )
 
-router = APIRouter(
-    prefix="/api/v1/items",
-    tags=["items"],
-)
+router = APIRouter(prefix="/api/v1/items", tags=["items"])
 
 
 def _ids_exist(driver: Driver, ids: list[int]) -> bool:
@@ -32,6 +35,31 @@ def _ids_exist(driver: Driver, ids: list[int]) -> bool:
     )
     records = run_query(driver, query, {"ids": distinct_ids})
     return bool(records and records[0]["all_exist"])
+
+
+async def _retrieve_item(driver: Driver, item_id: int) -> dict[str, Any]:
+    records = run_query(
+        driver,
+        "MATCH (i:Item {id: $id}) RETURN i",
+        {"id": item_id},
+    )
+    if not records:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
+
+    item = records[0]["i"]
+    data = ItemDetailData(
+        id=item["id"],
+        name=item["name"],
+        description=item.get("description"),
+        kind=item["kind"],
+        status=item["status"],
+        labels=item.get("labels", []),
+        aliases=item.get("aliases", []),
+    )
+    return {
+        "links": {"connections": f"/api/v1/items/{item_id}/connections"},
+        "data": data.model_dump(),
+    }
 
 
 @router.post("", status_code=201, response_model=ItemCreateResponse)
@@ -161,8 +189,7 @@ def list_items(
 
     skip = (page - 1) * per_page
     data_query = (
-        f"MATCH (i:Item) {where_clause} "
-        f"RETURN i {order_clause} SKIP $skip LIMIT $limit"
+        f"MATCH (i:Item) {where_clause} RETURN i {order_clause} SKIP $skip LIMIT $limit"
     )
     records = run_query(
         driver,
@@ -181,10 +208,12 @@ def list_items(
 
 
 @router.get("/{item_id}", response_model=ItemDetailResponse)
-def get_item(
+async def get_item(
+    request: Request,
     item_id: int,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
 ):
     """Retrieve a specific non-line item by its ID.
 
@@ -193,36 +222,43 @@ def get_item(
     """
     logger.info(f"Fetching item with ID: {item_id}")
 
-    records = run_query(
-        driver,
-        "MATCH (i:Item {id: $id}) RETURN i",
-        {"id": item_id},
-    )
-    if not records:
-        raise HTTPException(status_code=404, detail="Target item does not exist")
+    # Check Redis
+    if redis_client:
+        key = f"item:{item_id}"
+        data = await get_with_lock(
+            redis_client, key, lambda: _retrieve_item(driver, item_id), logger
+        )
+    else:
+        data = await _retrieve_item(driver, item_id)
 
-    item = records[0]["i"]
-    data = ItemDetailData(
-        id=item["id"],
-        name=item["name"],
-        description=item.get("description"),
-        kind=item["kind"],
-        status=item["status"],
-        labels=item.get("labels", []),
-        aliases=item.get("aliases", []),
+    # HTTP cache headers + ETag
+    data_str = json.dumps(data, sort_keys=True)
+    etag = f'"{hashlib.md5(data_str.encode()).hexdigest()}"'
+
+    # Check if client has current version
+    if request.headers.get("if-none-match") == etag:
+        logger.info(
+            f"Browser's cached value for item with ID {item_id} matches retrieved value"
+        )
+        return Response(status_code=304, headers={"ETag": etag})
+
+    return Response(
+        content=data_str,
+        media_type="application/json",
+        headers={
+            "ETag": etag,
+            "Cache-Control": f"public, max-age={get_settings().browser_cache_exp_time}",
+        },
     )
-    return {
-        "links": {"connections": f"/api/v1/items/{item_id}/connections"},
-        "data": data,
-    }
 
 
 @router.patch("/{item_id}", status_code=204)
-def patch_item(
+async def patch_item(
     item_id: int,
     payload: ItemUpdate,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
     # _token: str = Depends(require_admin),
 ):
     """Partially update a non-line item's name, description, and/or status.
@@ -271,15 +307,22 @@ def patch_item(
     )
     if not records:
         raise HTTPException(status_code=404, detail="Target item does not exist")
+
+    # Invalidate redis cache
+    if redis_client:
+        key = f"item:{item_id}"
+        await invalidate_redis_cache(redis_client, key, logger)
+
     return None
 
 
 @router.delete("/{item_id}", status_code=204)
-def delete_item(
+async def delete_item(
     item_id: int,
     force: Annotated[bool, Query(...)] = False,
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
+    redis_client: redis.Redis | None = Depends(get_redis_client),
     # _token: str = Depends(require_admin),
 ):
     """Delete a non-line item by its ID.
@@ -318,4 +361,10 @@ def delete_item(
         "MATCH (i:Item {id: $id}) DETACH DELETE i",
         {"id": item_id},
     )
+
+    # Invalidate redis cache
+    if redis_client:
+        key = f"item:{item_id}"
+        await invalidate_redis_cache(redis_client, key, logger)
+
     return None

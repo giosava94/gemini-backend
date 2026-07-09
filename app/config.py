@@ -18,6 +18,19 @@ class Settings(BaseSettings):
     log_level: Annotated[
         str, Field(description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     ] = "INFO"
+    redis_enabled: Annotated[
+        bool, Field(description="Enable Redis caching (True/False)")
+    ] = False
+    redis_host: Annotated[str, Field(description="Redis hostname")] = "localhost"
+    redis_exp_time: Annotated[int, Field(description="Caching expiration time")] = (
+        3600  # 1h
+    )
+    redis_lock_exp_time: Annotated[
+        int, Field(description="Redis lock expiration time")
+    ] = 10  # 10s
+    browser_cache_exp_time: Annotated[
+        int, Field(description="Broswer caching expiration time")
+    ] = 1800  # 30m
 
     class Config:
         env_file = ".env"

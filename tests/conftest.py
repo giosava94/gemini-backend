@@ -7,10 +7,14 @@ patch the db helper functions (``run_query``, ``find_by_id``,
 can be exercised without any external infrastructure.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+import os
+
+os.environ["REDIS_ENABLED"] = "False"
 
 from app.main import app
 
@@ -38,8 +42,24 @@ def mock_db_setup():
         yield mock_driver
 
 
+@pytest.fixture(autouse=True)
+def mock_redis_setup():
+    """Prevent the real Redis connection from being created during the lifespan.
+
+    Patches ``create_redis_client`` and ``close_redis_connection``
+    so the TestClient can start the application without a live redis connection.
+    """
+    mock_redis = AsyncMock()
+
+    with (
+        patch("app.main.create_redis_client", return_value=mock_redis),
+        patch("app.main.close_redis_connection", return_value=None),
+    ):
+        yield mock_redis
+
+
 @pytest.fixture()
-def client(mock_db_setup):
+def client(mock_db_setup, mock_redis_setup):
     """Return a TestClient with a fully booted app (lifespan executed)."""
     with TestClient(app) as c:
         yield c
