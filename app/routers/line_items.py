@@ -24,8 +24,7 @@ from app.schemas import (
 )
 
 router = APIRouter(
-    prefix="/api/v1/beam-lines/{beam_id}/line-items",
-    tags=["line-items"],
+    prefix="/api/v1/beam-lines/{beam_id}/line-items", tags=["line-items"]
 )
 
 
