@@ -1,5 +1,6 @@
 """Tests for the non-line item connections endpoints."""
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 
@@ -7,11 +8,11 @@ CONN_BASE = "/api/v1/items/42/connections"
 LI_CONN_BASE = "/api/v1/items/42/line-item-connections"
 
 
-def _conn_record(cid, name, desc=None):
+def _conn_record(cid, name, desc=None) -> dict[str, Any]:
     node = MagicMock()
     node.__getitem__ = lambda s, k: {"id": cid, "name": name}[k]
     node.get = lambda k, d=None: desc if k == "description" else d
-    return {"conn": node, "conn_labels": ["Item"]}
+    return {"conn": node}
 
 
 def _li_conn_record(lid, name, beam_id=1, desc=None):
@@ -36,20 +37,62 @@ class TestPutItemConnections:
                 [],  # merge
             ],
         ):
-            r = client.put(CONN_BASE, json={"items": [10]}, headers=admin_headers)
+            r = client.put(
+                CONN_BASE,
+                json={"items": [{"id": 10, "properties": {}}]},
+                headers=admin_headers,
+            )
         assert r.status_code == 201
 
+    def test_put_accepts_connection_properties(self, client, admin_headers):
+        with patch(
+            "app.routers.item_connections.run_query",
+            side_effect=[
+                [{"id": 42}],
+                [{"all_exist": True}],
+                [],
+            ],
+        ) as run_query_mock:
+            r = client.put(
+                CONN_BASE,
+                json={
+                    "items": [{"id": 10, "properties": {"kind": "rack", "index": 3}}]
+                },
+                headers=admin_headers,
+            )
+        assert r.status_code == 201
+        assert run_query_mock.call_args_list[-1].args[2]["connections"] == [
+            {"id": 10, "properties": {"kind": "rack", "index": 3}}
+        ]
+
     def test_put_self_reference(self, client, admin_headers):
-        r = client.put(CONN_BASE, json={"items": [42]}, headers=admin_headers)
+        r = client.put(
+            CONN_BASE,
+            json={"items": [{"id": 42, "properties": {}}]},
+            headers=admin_headers,
+        )
         assert r.status_code == 400
 
     def test_put_duplicate_items(self, client, admin_headers):
-        r = client.put(CONN_BASE, json={"items": [10, 10]}, headers=admin_headers)
+        r = client.put(
+            CONN_BASE,
+            json={
+                "items": [
+                    {"id": 10, "properties": {}},
+                    {"id": 10, "properties": {}},
+                ]
+            },
+            headers=admin_headers,
+        )
         assert r.status_code == 400
 
     def test_put_item_not_found(self, client, admin_headers):
         with patch("app.routers.item_connections.run_query", return_value=[]):
-            r = client.put(CONN_BASE, json={"items": [10]}, headers=admin_headers)
+            r = client.put(
+                CONN_BASE,
+                json={"items": [{"id": 10, "properties": {}}]},
+                headers=admin_headers,
+            )
         assert r.status_code == 404
 
     def test_put_target_not_found(self, client, admin_headers):
@@ -60,7 +103,11 @@ class TestPutItemConnections:
                 [{"all_exist": False}],
             ],
         ):
-            r = client.put(CONN_BASE, json={"items": [999]}, headers=admin_headers)
+            r = client.put(
+                CONN_BASE,
+                json={"items": [{"id": 999, "properties": {}}]},
+                headers=admin_headers,
+            )
         assert r.status_code == 404
 
 
@@ -72,6 +119,7 @@ class TestPutItemConnections:
 class TestListItemConnections:
     def test_list_success(self, client):
         record = _conn_record(10, "RACK-01")
+        record["rel_props"] = {"kind": "rack", "index": 2}
         with patch(
             "app.routers.item_connections.run_query",
             side_effect=[
@@ -85,6 +133,7 @@ class TestListItemConnections:
         body = r.json()
         assert body["total"] == 1
         assert body["data"][0]["id"] == 10
+        assert body["data"][0]["properties"] == {"kind": "rack", "index": 2}
 
     def test_list_item_not_found(self, client):
         with patch("app.routers.item_connections.run_query", return_value=[]):

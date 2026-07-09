@@ -55,8 +55,9 @@ def list_line_item_connections(
     skip = (page - 1) * per_page
     data_query = (
         "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-        "(li:LineItem {id: $id})-[:CONNECTED_TO]->(conn:Item) "
-        "RETURN conn SKIP $skip LIMIT $limit"
+        "(li:LineItem {id: $id})-[rel:CONNECTED_TO]->(conn:Item) "
+        "RETURN conn, properties(rel) AS rel_props "
+        "SKIP $skip LIMIT $limit"
     )
     records = run_query(
         driver,
@@ -68,6 +69,7 @@ def list_line_item_connections(
             id=record["conn"]["id"],
             name=record["conn"]["name"],
             description=record["conn"].get("description"),
+            properties=record.get("rel_props") or {},
             link=f"/api/v1/items/{record['conn']['id']}",
         )
         for record in records
@@ -130,10 +132,15 @@ def put_line_item_connections(
     """Add one or multiple non-line items to the current line item."""
     logger.info(
         f"Adding connections to line item {item_id} on beam line {beam_id}: "
-        f"{payload.items}"
+        f"{[item.id for item in payload.items]}"
     )
 
-    if len(payload.items) != len(set(payload.items)):
+    connections = [
+        {"id": item.id, "properties": item.properties} for item in payload.items
+    ]
+    target_ids = [connection["id"] for connection in connections]
+
+    if len(target_ids) != len(set(target_ids)):
         raise HTTPException(status_code=400, detail="Duplicated items in the list")
 
     # Verify beam line and current line item exist
@@ -150,7 +157,7 @@ def put_line_item_connections(
         )
 
     # Verify all target IDs exist as Item nodes
-    target_ids = list(set(payload.items))
+    target_ids = list(set(target_ids))
     target_records = run_query(
         driver,
         (
@@ -172,10 +179,15 @@ def put_line_item_connections(
         (
             "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
             "(li:LineItem {id: $id}) "
-            "UNWIND $target_ids AS target_id "
-            "MATCH (target:Item {id: target_id}) "
-            "MERGE (li)-[:CONNECTED_TO]->(target)"
+            "UNWIND $connections AS connection "
+            "MATCH (target:Item {id: connection.id}) "
+            "MERGE (li)-[rel:CONNECTED_TO]->(target) "
+            "SET rel = connection.properties"
         ),
-        {"beam_id": beam_id, "id": item_id, "target_ids": target_ids},
+        {
+            "beam_id": beam_id,
+            "id": item_id,
+            "connections": connections,
+        },
     )
     return None
