@@ -1,0 +1,15 @@
+services:
+  redis:
+    image: redis:8
+    container_name: redis-test
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    environment:
+      - REDIS_ARGS=--appendonly yes
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local
