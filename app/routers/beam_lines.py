@@ -3,15 +3,14 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated, Any
+from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import run_query, find_by_id
+from app.db import run_query
 from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     BeamLineCreate,
-    BeamLineData,
     BeamLineDetailResponse,
     BeamLineListResponse,
     BeamLineUpdate,
@@ -22,23 +21,15 @@ from app.dependencies import (
     get_logger,
     get_redis_client,
 )
-from app.cruds.beam_lines import create
+from app.cruds.beam_lines import (
+    create_beam_line_record,
+    get_beam_line_records,
+    get_total_beam_line_records,
+    get_beam_line_record,
+)
 from app.schemas.beam_lines import BeamLineCreateResponse
 
 router = APIRouter(prefix="/api/v1/beam-lines", tags=["beam-lines"])
-
-
-async def _retrieve_beam_line(driver: Driver, beam_id: int) -> dict[str, Any]:
-    item = find_by_id(driver, beam_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Target item does not exist")
-    data = {
-        "id": item["id"],
-        "name": item["name"],
-        "description": item.get("description"),
-    }
-    links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
-    return {"links": links, "data": data}
 
 
 @router.post(
@@ -69,7 +60,7 @@ def create_beam_line(
     """
     logger.info(f"Creating beam line with name: {payload.name}")
 
-    records = create(driver, payload)
+    records = create_beam_line_record(driver, payload)
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create beam line")
 
@@ -99,31 +90,17 @@ def list_beam_lines(
     logger.info(
         f"Listing beam lines - page: {page}, per_page: {per_page}, name filter: {name}"
     )
+
     if sort:
         for key in sort:
             if key != "name":
                 raise HTTPException(status_code=422, detail=f"Invalid sort key: {key}")
 
-    where_clause = "WHERE ($name IS NULL OR toLower(b.name) CONTAINS toLower($name))"
-    count_query = f"MATCH (b:BeamLine) {where_clause} RETURN count(b) AS total"
-    total_records = run_query(driver, count_query, {"name": name})
-    total = total_records[0]["total"] if total_records else 0
-
-    order_clause = "ORDER BY toLower(b.name)" if sort and "name" in sort else ""
-    query = (
-        f"MATCH (b:BeamLine) {where_clause} "
-        f"RETURN b {order_clause} SKIP $skip LIMIT $limit"
+    params = {"name": name}
+    total = get_total_beam_line_records(driver, params)
+    data = get_beam_line_records(
+        driver, params, sort=sort, page=page, per_page=per_page
     )
-    skip = (page - 1) * per_page
-    records = run_query(driver, query, {"name": name, "skip": skip, "limit": per_page})
-    data = [
-        BeamLineData(
-            id=record["b"]["id"],
-            name=record["b"]["name"],
-            description=record["b"].get("description"),
-        )
-        for record in records
-    ]
     return {"page": page, "per_page": per_page, "total": total, "data": data}
 
 
@@ -147,10 +124,13 @@ async def get_beam_line(
     if redis_client:
         key = f"beam_line:{beam_id}"
         data = await get_with_lock(
-            redis_client, key, lambda: _retrieve_beam_line(driver, beam_id), logger
+            redis_client, key, lambda: get_beam_line_record(driver, beam_id), logger
         )
     else:
-        data = await _retrieve_beam_line(driver, beam_id)
+        data = await get_beam_line_record(driver, beam_id)
+
+    if not data:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
 
     # HTTP cache headers + ETag
     data_str = json.dumps(data, sort_keys=True)

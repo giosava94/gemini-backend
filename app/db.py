@@ -82,28 +82,6 @@ def run_query(driver: Driver, query: str, parameters: dict | None = None) -> lis
     return records
 
 
-def find_by_id(driver: Driver, item_id: int) -> dict | None:
-    """Find a BeamLine node by its integer ID.
-
-    Returns a plain ``dict`` with keys ``id``, ``name``, and ``description``
-    when the node is found, or ``None`` when no matching BeamLine exists.
-    """
-    logger.debug(f"Finding beam line by ID: {item_id}")
-    query = "MATCH (b:BeamLine {id: $id}) RETURN b"
-    records = run_query(driver, query, {"id": item_id})
-    if not records:
-        logger.warning(f"Beam line not found with ID: {item_id}")
-        return None
-    node = records[0]["b"]
-    result = {
-        "id": node["id"],
-        "name": node["name"],
-        "description": node.get("description"),
-    }
-    logger.debug(f"Found beam line: {result}")
-    return result
-
-
 def exists_any_name(driver: Driver, name: str, exclude_id: int | None = None) -> bool:
     """Return ``True`` if any BeamLine, LineItem, or Item node shares *name*.
 

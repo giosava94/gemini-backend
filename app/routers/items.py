@@ -3,7 +3,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated, Any
+from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
@@ -18,13 +18,16 @@ from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     ItemCreate,
     ItemCreateResponse,
-    ItemData,
-    ItemDetailData,
     ItemDetailResponse,
     ItemListResponse,
     ItemUpdate,
 )
-from app.cruds.items import create
+from app.cruds.items import (
+    create,
+    get_item_record,
+    get_item_records,
+    get_total_item_records,
+)
 
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
 
@@ -41,31 +44,6 @@ def conn_items_exist(driver: Driver, ids: list[int]) -> bool:
     )
     records = run_query(driver, query, {"ids": distinct_ids})
     return bool(records and records[0]["all_exist"])
-
-
-async def _retrieve_item(driver: Driver, item_id: int) -> dict[str, Any]:
-    records = run_query(
-        driver,
-        "MATCH (i:Item {id: $id}) RETURN i",
-        {"id": item_id},
-    )
-    if not records:
-        raise HTTPException(status_code=404, detail="Target item does not exist")
-
-    item = records[0]["i"]
-    data = ItemDetailData(
-        id=item["id"],
-        name=item["name"],
-        description=item.get("description"),
-        kind=item["kind"],
-        status=item["status"],
-        labels=item.get("labels", []),
-        aliases=item.get("aliases", []),
-    )
-    return {
-        "links": {"connections": f"/api/v1/items/{item_id}/connections"},
-        "data": data.model_dump(),
-    }
 
 
 @router.post(
@@ -144,43 +122,10 @@ def list_items(
                     detail=f"Invalid sort key: {key}. Valid values: name, kind",
                 )
 
-    where_clause = (
-        "WHERE ($name IS NULL OR toLower(i.name) CONTAINS toLower($name)) "
-        "AND ($alias IS NULL OR ANY(alias IN coalesce(i.aliases, []) "
-        "WHERE toLower(alias) CONTAINS toLower($alias))) "
-    )
-    parameters: dict = {"name": name, "alias": alias}
+    params = {"name": name, "alias": alias}
+    total = get_total_item_records(driver, params)
+    data = get_item_records(driver, params, sort=sort, page=page, per_page=per_page)
 
-    count_query = f"MATCH (i:Item) {where_clause} RETURN count(i) AS total"
-    total_records = run_query(driver, count_query, parameters)
-    total = total_records[0]["total"] if total_records else 0
-
-    sort_clauses = []
-    if sort:
-        for key in sort:
-            if key == "name":
-                sort_clauses.append("toLower(i.name)")
-            elif key == "kind":
-                sort_clauses.append("i.kind")
-    order_clause = f"ORDER BY {', '.join(sort_clauses)}" if sort_clauses else ""
-
-    skip = (page - 1) * per_page
-    data_query = (
-        f"MATCH (i:Item) {where_clause} RETURN i {order_clause} SKIP $skip LIMIT $limit"
-    )
-    records = run_query(
-        driver,
-        data_query,
-        {**parameters, "skip": skip, "limit": per_page},
-    )
-    data = [
-        ItemData(
-            id=record["i"]["id"],
-            name=record["i"]["name"],
-            description=record["i"].get("description"),
-        )
-        for record in records
-    ]
     return {"page": page, "per_page": per_page, "total": total, "data": data}
 
 
@@ -203,10 +148,13 @@ async def get_item(
     if redis_client:
         key = f"item:{item_id}"
         data = await get_with_lock(
-            redis_client, key, lambda: _retrieve_item(driver, item_id), logger
+            redis_client, key, lambda: get_item_record(driver, item_id), logger
         )
     else:
-        data = await _retrieve_item(driver, item_id)
+        data = await get_item_record(driver, item_id)
+
+    if not data:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
 
     # HTTP cache headers + ETag
     data_str = json.dumps(data, sort_keys=True)

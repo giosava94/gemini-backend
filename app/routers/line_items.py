@@ -3,7 +3,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated, Any
+from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
@@ -20,14 +20,17 @@ from app.schemas import (
     LineItemAdjacent,
     LineItemCreate,
     LineItemCreateResponse,
-    LineItemData,
-    LineItemDetailData,
     LineItemDetailResponse,
     LineItemListResponse,
     LineItemStatus,
     LineItemUpdate,
 )
-from app.cruds.line_items import create
+from app.cruds.line_items import (
+    create,
+    get_line_item_record,
+    get_line_item_records,
+    get_total_line_item_records,
+)
 
 
 def check_beam_line_exists(beam_id: int, driver: Driver = Depends(get_driver)):
@@ -70,38 +73,6 @@ def has_duplicate_adjacent_index(items: list[LineItemAdjacent]) -> bool:
             return True
         seen.add(key)
     return False
-
-
-async def _retrieve_line_item(
-    driver: Driver, beam_id: int, item_id: int
-) -> dict[str, Any]:
-    query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
-        "RETURN li"
-    )
-    records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})
-    if not records:
-        raise HTTPException(
-            status_code=404,
-            detail="Beam line or target item does not exist",
-        )
-
-    item = records[0]["li"]
-    base_url = f"/api/v1/beam-lines/{beam_id}/line-items/{item_id}"
-    links = {
-        "adjacents": f"{base_url}/adjacents",
-        "connections": f"{base_url}/connections",
-    }
-    data = LineItemDetailData(
-        id=item["id"],
-        name=item["name"],
-        description=item.get("description"),
-        kind=item["kind"],
-        status=item["status"],
-        labels=item.get("labels", []),
-        aliases=item.get("aliases", []),
-    )
-    return {"links": links, "data": data.model_dump()}
 
 
 @router.post(
@@ -177,7 +148,7 @@ def list_line_items(
 
     :param beam_id: ID of the parent beam line.
     :param page: 1-based page number.
-    :param per_page: Number of results per page (1–100).
+    :param per_page: Number of results per page (1-100).
     :param sort: Optional sort keys; accepted values are ``"name"`` and ``"kind"``.
     :param name: Optional case-insensitive substring filter on the item name.
     :param kind: Optional case-insensitive kind filter (e.g. ``"diagnostic"``).
@@ -210,59 +181,18 @@ def list_line_items(
                 detail=f"Invalid kind; must be one of: {allowed}",
             )
 
-    where_clause = (
-        "WHERE ($status IS NULL OR li.status = $status) "
-        "AND ($name IS NULL OR toLower(li.name) CONTAINS toLower($name)) "
-        "AND ($alias IS NULL OR ANY(alias IN coalesce(li.aliases, []) "
-        "WHERE toLower(alias) CONTAINS toLower($alias))) "
-        "AND ($kind IS NULL OR li.kind = $kind)"
-    )
-    parameters = {
+    params = {
         "beam_id": beam_id,
         "status": status.value if status else None,
         "name": name,
         "alias": alias,
         "kind": normalized_kind.value if normalized_kind else None,
     }
-    count_query = (
-        "MATCH (b:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem) "
-        f"{where_clause} "
-        "RETURN count(li) AS total"
+    total = get_total_line_item_records(driver, params)
+    data = get_line_item_records(
+        driver, params, sort=sort, page=page, per_page=per_page
     )
-    total_records = run_query(driver, count_query, parameters)
-    total = total_records[0]["total"] if total_records else 0
 
-    sort_clauses = []
-    if sort:
-        for key in sort:
-            if key == "name":
-                sort_clauses.append("toLower(li.name)")
-            elif key == "kind":
-                sort_clauses.append("li.kind")
-    order_clause = f"ORDER BY {', '.join(sort_clauses)}" if sort_clauses else ""
-    query = (
-        "MATCH (b:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem) "
-        f"{where_clause} "
-        f"RETURN li {order_clause} SKIP $skip LIMIT $limit"
-    )
-    skip = (page - 1) * per_page
-    records = run_query(
-        driver,
-        query,
-        {
-            **parameters,
-            "skip": skip,
-            "limit": per_page,
-        },
-    )
-    data = [
-        LineItemData(
-            id=record["li"]["id"],
-            name=record["li"]["name"],
-            description=record["li"].get("description"),
-        )
-        for record in records
-    ]
     return {"page": page, "per_page": per_page, "total": total, "data": data}
 
 
@@ -289,11 +219,16 @@ async def get_line_item(
         data = await get_with_lock(
             redis_client,
             key,
-            lambda: _retrieve_line_item(driver, beam_id, item_id),
+            lambda: get_line_item_record(driver, beam_id, item_id),
             logger,
         )
     else:
-        data = await _retrieve_line_item(driver, beam_id, item_id)
+        data = await get_line_item_record(driver, beam_id, item_id)
+
+    if not data:
+        raise HTTPException(
+            status_code=404, detail="Beam line or target item does not exist"
+        )
 
     # HTTP cache headers + ETag
     data_str = json.dumps(data, sort_keys=True)
