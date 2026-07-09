@@ -4,7 +4,7 @@ from typing import Annotated
 import logging
 from app.db import run_query
 from app.dependencies import get_driver, get_logger
-from app.schemas import (
+from app.schemas.line_item_connections import (
     LineItemConnectionData,
     LineItemConnectionsDelete,
     LineItemConnectionsListResponse,

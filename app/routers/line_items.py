@@ -14,7 +14,7 @@ from app.dependencies import (
     get_redis_client,
 )
 from app.redis import get_with_lock, invalidate_redis_cache
-from app.schemas import (
+from app.schemas.line_items import (
     LINE_ITEM_KIND_LOOKUP,
     LineItemCreate,
     LineItemCreateResponse,

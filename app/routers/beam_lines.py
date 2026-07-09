@@ -8,7 +8,7 @@ import logging
 import redis.asyncio as redis
 from app.config import get_settings
 from app.redis import get_with_lock, invalidate_redis_cache
-from app.schemas import (
+from app.schemas.beam_lines import (
     BeamLineCreate,
     BeamLineDetailResponse,
     BeamLineListResponse,

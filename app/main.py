@@ -20,7 +20,7 @@ from app.routers.line_item_adjacents import router as line_item_adjacents_router
 from app.routers.line_item_connections import router as line_item_connections_router
 from app.routers.items import router as item_router
 from app.routers.item_connections import router as item_connections_router
-from app.schemas import HealthResponse, StatusEnum
+from app.schemas.common import HealthResponse, StatusEnum
 from datetime import datetime, timezone
 
 
