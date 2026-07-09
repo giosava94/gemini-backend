@@ -3,20 +3,7 @@ from neo4j import Driver
 from typing import Annotated
 import logging
 
-
-def get_driver_from_state(request: Request) -> Driver:
-    """Retrieve the Neo4j driver stored on the FastAPI application state.
-
-    :raises RuntimeError: If the driver has not been initialised yet.
-    """
-    if not hasattr(request.app, "driver"):
-        raise RuntimeError("Neo4j driver is not initialized")
-    return request.app.driver
-
-
-async def get_driver(request: Request) -> Driver:
-    """FastAPI dependency that returns the Neo4j driver from application state."""
-    return get_driver_from_state(request)
+import redis.asyncio as redis
 
 
 def get_current_token(
@@ -49,6 +36,16 @@ def require_admin(token: str | None = Depends(get_current_token)):
     return token
 
 
+def get_driver(request: Request) -> Driver:
+    """FastAPI dependency that returns the Neo4j driver from application state.
+
+    :raises RuntimeError: If the driver has not been initialised yet.
+    """
+    if not hasattr(request.app, "driver"):
+        raise RuntimeError("Neo4j driver is not initialized")
+    return request.app.driver
+
+
 def get_logger(request: Request) -> logging.Logger:
     """FastAPI dependency that returns the application logger from app state.
 
@@ -57,3 +54,13 @@ def get_logger(request: Request) -> logging.Logger:
     if not hasattr(request.app, "logger"):
         raise RuntimeError("Logger is not initialized")
     return request.app.logger
+
+
+def get_redis_client(request: Request) -> redis.Redis | None:
+    """FastAPI dependency that returns the Redis client from app state.
+
+    :raises RuntimeError: If the Redis client has not been initialised yet.
+    """
+    if not hasattr(request.app, "redis_client"):
+        raise RuntimeError("Redis client is not initialized")
+    return request.app.redis_client
