@@ -22,6 +22,7 @@ from app.schemas import (
     LineItemStatus,
     LineItemUpdate,
 )
+from app.cruds.line_items import create
 
 router = APIRouter(
     prefix="/api/v1/beam-lines/{beam_id}/line-items", tags=["line-items"]
@@ -153,71 +154,16 @@ def create_line_item(
         )
 
     adjacent_ids = [adjacent.id for adjacent in payload.adjacents]
-    connection_ids = payload.connections
-    if not _line_item_ids_exist(driver, adjacent_ids + connection_ids):
+    if not _line_item_ids_exist(driver, adjacent_ids + payload.connections):
         raise HTTPException(
             status_code=404,
             detail="Previous, next or connected item does not exist",
         )
 
-    adjacents = [
-        {
-            "id": adjacent.id,
-            "position": adjacent.position.value,
-            "index": adjacent.index,
-        }
-        for adjacent in payload.adjacents
-    ]
-    query = (
-        "MATCH (beam:BeamLine {id: $beam_id}) "
-        "MERGE (c:Counter {name: 'lineitem'}) "
-        "ON CREATE SET c.value = 0 "
-        "SET c.value = c.value + 1 "
-        "WITH beam, c.value AS nextId "
-        "CREATE (li:LineItem {"
-        "id: nextId, name: $name, description: $description, "
-        "kind: $kind, status: $status, labels: $labels, aliases: $aliases"
-        "}) "
-        "CREATE (beam)-[:HAS_LINE_ITEM]->(li) "
-        "WITH li "
-        "CALL (li) { "
-        "UNWIND $adjacents AS adjacent "
-        "MATCH (target:LineItem {id: adjacent.id}) "
-        "FOREACH (_ IN CASE WHEN adjacent.position IN ['Previous', 'Dual'] THEN [1] ELSE [] END | "
-        "  CREATE (li)-[:PREVIOUS {index: adjacent.index}]->(target) "
-        "  CREATE (target)-[:NEXT {index: adjacent.index}]->(li) "
-        ") "
-        "FOREACH (_ IN CASE WHEN adjacent.position IN ['Next', 'Dual'] THEN [1] ELSE [] END | "
-        "  CREATE (li)-[:NEXT {index: adjacent.index}]->(target) "
-        "  CREATE (target)-[:PREVIOUS {index: adjacent.index}]->(li) "
-        ") "
-        "RETURN count(*) AS adjacent_count "
-        "} "
-        "CALL (li) { "
-        "UNWIND $connections AS connected_id "
-        "MATCH (target:LineItem {id: connected_id}) "
-        "CREATE (li)-[:CONNECTED_TO]->(target) "
-        "RETURN count(*) AS connection_count "
-        "} "
-        "RETURN li.id AS id"
-    )
-    records = run_query(
-        driver,
-        query,
-        {
-            "beam_id": beam_id,
-            "name": payload.name,
-            "description": payload.description,
-            "kind": payload.kind.value,
-            "status": payload.status.value,
-            "labels": payload.labels,
-            "aliases": payload.aliases,
-            "adjacents": adjacents,
-            "connections": list(set(connection_ids)),
-        },
-    )
+    records = create(driver, payload, beam_id)
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create line item")
+
     return {"id": records[0]["id"]}
 
 

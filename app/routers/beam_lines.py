@@ -17,6 +17,7 @@ from app.schemas import (
     BeamLineUpdate,
 )
 from app.dependencies import get_driver, get_logger, get_redis_client
+from app.cruds.beam_lines import create
 
 router = APIRouter(prefix="/api/v1/beam-lines", tags=["beam-lines"])
 
@@ -56,24 +57,16 @@ def create_beam_line(
         {"id": 1}
     """
     logger.info(f"Creating beam line with name: {payload.name}")
-    name = payload.name
-    if exists_any_name(driver, name):
+
+    if exists_any_name(driver, payload.name):
         raise HTTPException(
             status_code=409, detail="Item with this name already exists"
         )
-    query = (
-        "MERGE (c:Counter {name: 'beamline'}) "
-        "ON CREATE SET c.value = 0 "
-        "SET c.value = c.value + 1 "
-        "WITH c.value AS nextId "
-        "CREATE (b:BeamLine {id: nextId, name: $name, description: $description}) "
-        "RETURN b.id AS id"
-    )
-    records = run_query(
-        driver, query, {"name": name, "description": payload.description}
-    )
+
+    records = create(driver, payload)
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create beam line")
+
     return {"id": records[0]["id"]}
 
 

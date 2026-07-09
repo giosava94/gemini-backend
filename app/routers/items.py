@@ -19,6 +19,7 @@ from app.schemas import (
     ItemListResponse,
     ItemUpdate,
 )
+from app.cruds.items import create
 
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
 
@@ -100,39 +101,10 @@ def create_item(
             detail="At least one item that should be connected does not exist",
         )
 
-    query = (
-        "MERGE (c:Counter {name: 'item'}) "
-        "ON CREATE SET c.value = 0 "
-        "SET c.value = c.value + 1 "
-        "WITH c.value AS nextId "
-        "CREATE (i:Item {"
-        "id: nextId, name: $name, description: $description, "
-        "kind: $kind, status: $status, labels: $labels, aliases: $aliases"
-        "}) "
-        "WITH i "
-        "CALL (i) { "
-        "UNWIND $connections AS connected_id "
-        "MATCH (target) WHERE (target:Item OR target:LineItem) AND target.id = connected_id "
-        "CREATE (i)-[:CONNECTED_TO]->(target) "
-        "RETURN count(*) AS connection_count "
-        "} "
-        "RETURN i.id AS id"
-    )
-    records = run_query(
-        driver,
-        query,
-        {
-            "name": payload.name,
-            "description": payload.description,
-            "kind": payload.kind.value,
-            "status": payload.status.value,
-            "labels": payload.labels,
-            "aliases": payload.aliases,
-            "connections": list(set(payload.connections)),
-        },
-    )
+    records = create(driver, payload)
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create item")
+
     return {"id": records[0]["id"]}
 
 
