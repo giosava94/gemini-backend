@@ -7,7 +7,6 @@ from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import run_query
 from app.dependencies import (
     check_name_uniqueness,
     get_driver,
@@ -34,6 +33,7 @@ from app.cruds.line_items import (
     has_duplicate_adjacent_index,
     adj_and_conn_items_exist,
     beam_line_exists,
+    update_line_item_record,
 )
 
 
@@ -249,41 +249,13 @@ async def patch_line_item(
     """
     logger.info(f"Updating line item with ID: {item_id} for beam line {beam_id}")
 
-    update_clauses: list[str] = []
-    parameters: dict[str, object] = {"beam_id": beam_id, "id": item_id}
-    if payload.name is not None:
-        update_clauses.append("li.name = $name")
-        parameters["name"] = payload.name
-    if payload.description is not None:
-        update_clauses.append("li.description = $description")
-        parameters["description"] = payload.description
-    if payload.status is not None:
-        update_clauses.append("li.status = $status")
-        parameters["status"] = payload.status.value
-    if payload.kind is not None:
-        update_clauses.append("li.kind = $kind")
-        parameters["kind"] = payload.kind.value
-    if payload.labels is not None:
-        update_clauses.append("li.labels = $labels")
-        parameters["labels"] = payload.labels
-    if payload.aliases is not None:
-        update_clauses.append("li.aliases = $aliases")
-        parameters["aliases"] = payload.aliases
-
-    if not update_clauses:
+    if not payload.model_dump():
         return None
 
-    query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-        "(li:LineItem {id: $id}) "
-        f"SET {', '.join(update_clauses)} "
-        "RETURN li.id AS id"
-    )
-    records = run_query(driver, query, parameters)
+    records = update_line_item_record(driver, payload, beam_id, item_id)
     if not records:
         raise HTTPException(
-            status_code=404,
-            detail="Beam line or target item does not exist",
+            status_code=404, detail="Beam line or target item does not exist"
         )
 
     # Invalidate redis cache

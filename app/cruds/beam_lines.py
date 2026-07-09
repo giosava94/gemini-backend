@@ -3,7 +3,12 @@ from typing import Any
 from neo4j import Driver
 
 from app.db import run_query
-from app.schemas.beam_lines import BeamLineCreate, BeamLineData, BeamLineDetailData
+from app.schemas.beam_lines import (
+    BeamLineCreate,
+    BeamLineData,
+    BeamLineDetailData,
+    BeamLineUpdate,
+)
 
 
 def create_beam_line_record(driver: Driver, payload: BeamLineCreate) -> list:
@@ -67,6 +72,21 @@ async def get_beam_line_record(driver: Driver, beam_id: int) -> dict[str, Any] |
     )
     links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
     return {"links": links, "data": data}
+
+
+def update_beam_line_record(driver: Driver, payload: BeamLineUpdate, beam_id: int):
+    update_clauses = []
+    parameters: dict = {"id": beam_id}
+    if payload.name is not None:
+        update_clauses.append("b.name = $name")
+        parameters["name"] = payload.name
+    if payload.description is not None:
+        update_clauses.append("b.description = $description")
+        parameters["description"] = payload.description
+
+    query = f"MATCH (b:BeamLine {{id: $id}}) SET {', '.join(update_clauses)} RETURN b"
+    records = run_query(driver, query, parameters)
+    return records
 
 
 def get_beam_line_relationships(driver: Driver, beam_id: int):

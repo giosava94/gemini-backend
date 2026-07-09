@@ -3,7 +3,7 @@ from typing import Any
 from neo4j import Driver
 
 from app.db import run_query
-from app.schemas.items import ItemCreate, ItemData, ItemDetailData
+from app.schemas.items import ItemCreate, ItemData, ItemDetailData, ItemUpdate
 
 
 def create(driver: Driver, payload: ItemCreate) -> list:
@@ -103,6 +103,32 @@ async def get_item_record(driver: Driver, item_id: int) -> dict[str, Any] | None
     )
     links = {"connections": f"/api/v1/items/{item_id}/connections"}
     return {"links": links, "data": data.model_dump()}
+
+
+def update_item_record(driver: Driver, payload: ItemUpdate, item_id: int):
+    update_clauses = []
+    parameters: dict = {"id": item_id}
+    if payload.name is not None:
+        update_clauses.append("i.name = $name")
+        parameters["name"] = payload.name
+    if payload.description is not None:
+        update_clauses.append("i.description = $description")
+        parameters["description"] = payload.description
+    if payload.status is not None:
+        update_clauses.append("i.status = $status")
+        parameters["status"] = payload.status.value
+    if payload.labels is not None:
+        update_clauses.append("i.labels = $labels")
+        parameters["labels"] = payload.labels
+    if payload.aliases is not None:
+        update_clauses.append("i.aliases = $aliases")
+        parameters["aliases"] = payload.aliases
+
+    query = (
+        f"MATCH (i:Item {{id: $id}}) SET {', '.join(update_clauses)} RETURN i.id AS id"
+    )
+    records = run_query(driver, query, parameters)
+    return records
 
 
 def get_item_relationships(driver: Driver, item_id: int):

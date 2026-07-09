@@ -7,7 +7,6 @@ from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import run_query
 from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     BeamLineCreate,
@@ -28,6 +27,7 @@ from app.cruds.beam_lines import (
     get_beam_line_relationships,
     get_total_beam_line_records,
     get_beam_line_record,
+    update_beam_line_record,
 )
 from app.schemas.beam_lines import BeamLineCreateResponse
 
@@ -177,18 +177,10 @@ async def patch_beam_line(
     """
     logger.info(f"Updating beam line with ID: {beam_id}")
 
-    update_clauses: list[str] = []
-    parameters: dict[str, object] = {"id": beam_id}
-    if payload.name is not None:
-        update_clauses.append("b.name = $name")
-        parameters["name"] = payload.name
-    if payload.description is not None:
-        update_clauses.append("b.description = $description")
-        parameters["description"] = payload.description
-    if not update_clauses:
+    if not payload.model_dump():
         return None
-    query = f"MATCH (b:BeamLine {{id: $id}}) SET {', '.join(update_clauses)} RETURN b"
-    records = run_query(driver, query, parameters)
+
+    records = update_beam_line_record(driver, payload, beam_id)
     if not records:
         raise HTTPException(status_code=404, detail="Target item does not exist")
 

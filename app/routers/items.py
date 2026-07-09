@@ -7,7 +7,6 @@ from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import run_query
 from app.dependencies import (
     check_name_uniqueness,
     get_driver,
@@ -30,6 +29,7 @@ from app.cruds.items import (
     get_item_relationships,
     get_total_item_records,
     conn_items_exist,
+    update_item_record,
 )
 
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
@@ -188,36 +188,10 @@ async def patch_item(
     """
     logger.info(f"Updating item with ID: {item_id}")
 
-    update_clauses: list[str] = []
-    parameters: dict = {"id": item_id}
-    if payload.name is not None:
-        update_clauses.append("i.name = $name")
-        parameters["name"] = payload.name
-    if payload.description is not None:
-        update_clauses.append("i.description = $description")
-        parameters["description"] = payload.description
-    if payload.status is not None:
-        update_clauses.append("i.status = $status")
-        parameters["status"] = payload.status.value
-    if payload.labels is not None:
-        update_clauses.append("i.labels = $labels")
-        parameters["labels"] = payload.labels
-    if payload.aliases is not None:
-        update_clauses.append("i.aliases = $aliases")
-        parameters["aliases"] = payload.aliases
-
-    if not update_clauses:
+    if not payload.model_dump():
         return None
 
-    records = run_query(
-        driver,
-        (
-            f"MATCH (i:Item {{id: $id}}) "
-            f"SET {', '.join(update_clauses)} "
-            "RETURN i.id AS id"
-        ),
-        parameters,
-    )
+    records = update_item_record(driver, payload, item_id)
     if not records:
         raise HTTPException(status_code=404, detail="Target item does not exist")
 

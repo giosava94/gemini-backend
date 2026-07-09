@@ -4,7 +4,12 @@ from neo4j import Driver
 
 from app.db import run_query
 from app.schemas.line_item_adjacents import LineItemAdjacent
-from app.schemas.line_items import LineItemCreate, LineItemData, LineItemDetailData
+from app.schemas.line_items import (
+    LineItemCreate,
+    LineItemData,
+    LineItemDetailData,
+    LineItemUpdate,
+)
 
 
 def create(driver: Driver, payload: LineItemCreate, beam_id: int) -> list:
@@ -146,6 +151,40 @@ async def get_line_item_record(
         "connections": f"{base_url}/connections",
     }
     return {"links": links, "data": data.model_dump()}
+
+
+def update_line_item_record(
+    driver: Driver, payload: LineItemUpdate, beam_id: int, line_item_id: int
+):
+    update_clauses: list[str] = []
+    parameters: dict[str, object] = {"beam_id": beam_id, "id": line_item_id}
+    if payload.name is not None:
+        update_clauses.append("li.name = $name")
+        parameters["name"] = payload.name
+    if payload.description is not None:
+        update_clauses.append("li.description = $description")
+        parameters["description"] = payload.description
+    if payload.status is not None:
+        update_clauses.append("li.status = $status")
+        parameters["status"] = payload.status.value
+    if payload.kind is not None:
+        update_clauses.append("li.kind = $kind")
+        parameters["kind"] = payload.kind.value
+    if payload.labels is not None:
+        update_clauses.append("li.labels = $labels")
+        parameters["labels"] = payload.labels
+    if payload.aliases is not None:
+        update_clauses.append("li.aliases = $aliases")
+        parameters["aliases"] = payload.aliases
+
+    query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(li:LineItem {id: $id}) "
+        f"SET {', '.join(update_clauses)} "
+        "RETURN li.id AS id"
+    )
+    records = run_query(driver, query, parameters)
+    return records
 
 
 def get_line_item_relationships(driver: Driver, beam_id: int, line_item_id: int):
