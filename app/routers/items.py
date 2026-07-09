@@ -58,7 +58,7 @@ async def _retrieve_item(driver: Driver, item_id: int) -> dict[str, Any]:
     )
     return {
         "links": {"connections": f"/api/v1/items/{item_id}/connections"},
-        "data": data,
+        "data": data.model_dump(),
     }
 
 

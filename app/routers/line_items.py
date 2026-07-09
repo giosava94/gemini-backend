@@ -99,7 +99,7 @@ async def _retrieve_line_item(
         labels=item.get("labels", []),
         aliases=item.get("aliases", []),
     )
-    return {"links": links, "data": data}
+    return {"links": links, "data": data.model_dump()}
 
 
 @router.post("", status_code=201, response_model=LineItemCreateResponse)
