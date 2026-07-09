@@ -7,8 +7,13 @@ from typing import Annotated, Any
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import exists_any_name, run_query
-from app.dependencies import get_driver, get_logger, get_redis_client
+from app.db import run_query
+from app.dependencies import (
+    check_name_uniqueness,
+    get_driver,
+    get_logger,
+    get_redis_client,
+)
 from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     ItemCreate,
@@ -24,14 +29,14 @@ from app.cruds.items import create
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
 
 
-def _ids_exist(driver: Driver, ids: list[int]) -> bool:
+def conn_items_exist(driver: Driver, ids: list[int]) -> bool:
     """Return True if every ID in *ids* belongs to an existing Item or LineItem node."""
     distinct_ids = list(set(ids))
     if not distinct_ids:
         return True
     query = (
         "UNWIND $ids AS id "
-        "OPTIONAL MATCH (n) WHERE (n:Item OR n:LineItem) AND n.id = id "
+        "OPTIONAL MATCH (n) WHERE (n:Item) AND n.id = id "
         "RETURN count(n) = size($ids) AS all_exist"
     )
     records = run_query(driver, query, {"ids": distinct_ids})
@@ -63,7 +68,12 @@ async def _retrieve_item(driver: Driver, item_id: int) -> dict[str, Any]:
     }
 
 
-@router.post("", status_code=201, response_model=ItemCreateResponse)
+@router.post(
+    "",
+    status_code=201,
+    response_model=ItemCreateResponse,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 def create_item(
     payload: ItemCreate,
     driver: Driver = Depends(get_driver),
@@ -90,12 +100,7 @@ def create_item(
     """
     logger.info(f"Creating item with name: {payload.name}")
 
-    if exists_any_name(driver, payload.name):
-        raise HTTPException(
-            status_code=409, detail="Item with this name already exists"
-        )
-
-    if payload.connections and not _ids_exist(driver, payload.connections):
+    if conn_items_exist(driver, payload.connections):
         raise HTTPException(
             status_code=404,
             detail="At least one item that should be connected does not exist",
@@ -224,7 +229,11 @@ async def get_item(
     )
 
 
-@router.patch("/{item_id}", status_code=204)
+@router.patch(
+    "/{item_id}",
+    status_code=204,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 async def patch_item(
     item_id: int,
     payload: ItemUpdate,
@@ -241,11 +250,6 @@ async def patch_item(
     taken by another node.
     """
     logger.info(f"Updating item with ID: {item_id}")
-
-    if payload.name and exists_any_name(driver, payload.name, exclude_id=item_id):
-        raise HTTPException(
-            status_code=409, detail="An item with the same name already exists"
-        )
 
     update_clauses: list[str] = []
     parameters: dict = {"id": item_id}

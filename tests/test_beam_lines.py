@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 class TestCreateBeamLine:
     def test_create_success(self, client, admin_headers):
         with (
-            patch("app.routers.beam_lines.exists_any_name", return_value=False),
+            patch("app.routers.beam_lines.check_name_uniqueness", return_value=None),
             patch("app.routers.beam_lines.run_query", return_value=[{"id": 1}]),
         ):
             r = client.post(
@@ -23,7 +23,7 @@ class TestCreateBeamLine:
         assert r.json() == {"id": 1}
 
     def test_create_conflict(self, client, admin_headers):
-        with patch("app.routers.beam_lines.exists_any_name", return_value=True):
+        with patch("app.routers.beam_lines.check_name_uniqueness", return_value=True):
             r = client.post(
                 "/api/v1/beam-lines",
                 json={"name": "LEBT"},

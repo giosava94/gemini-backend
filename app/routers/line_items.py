@@ -7,8 +7,13 @@ from typing import Annotated, Any
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import exists_any_name, run_query
-from app.dependencies import get_driver, get_logger, get_redis_client
+from app.db import run_query
+from app.dependencies import (
+    check_name_uniqueness,
+    get_driver,
+    get_logger,
+    get_redis_client,
+)
 from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     LINE_ITEM_KIND_LOOKUP,
@@ -24,12 +29,23 @@ from app.schemas import (
 )
 from app.cruds.line_items import create
 
+
+def check_beam_line_exists(beam_id: int, driver: Driver = Depends(get_driver)):
+    records = run_query(
+        driver, "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id", {"id": beam_id}
+    )
+    if not records:
+        raise HTTPException(status_code=404, detail="Beam line does not exist")
+
+
 router = APIRouter(
-    prefix="/api/v1/beam-lines/{beam_id}/line-items", tags=["line-items"]
+    prefix="/api/v1/beam-lines/{beam_id}/line-items",
+    tags=["line-items"],
+    dependencies=[Depends(check_beam_line_exists)],
 )
 
 
-def _line_item_ids_exist(driver: Driver, ids: list[int]) -> bool:
+def adj_and_conn_items_exist(driver: Driver, ids: list[int]) -> bool:
     """Return True if every distinct ID in *ids* belongs to an existing LineItem node."""
     distinct_ids = list(set(ids))
     if not distinct_ids:
@@ -43,12 +59,7 @@ def _line_item_ids_exist(driver: Driver, ids: list[int]) -> bool:
     return bool(records and records[0]["all_exist"])
 
 
-def _has_duplicate_adjacent_index(payload: LineItemCreate) -> bool:
-    """Return True if *payload* contains two adjacents with the same (position, index) key."""
-    return _has_duplicate_adjacent_index_in_items(payload.adjacents)
-
-
-def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> bool:
+def has_duplicate_adjacent_index(items: list[LineItemAdjacent]) -> bool:
     """Return True if *items* contains two entries sharing the same (position, index) pair."""
     seen: set[tuple[str, int]] = set()
     for adjacent in items:
@@ -59,16 +70,6 @@ def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> boo
             return True
         seen.add(key)
     return False
-
-
-def _beam_line_exists(driver: Driver, beam_id: int) -> bool:
-    """Return True if a BeamLine node with *beam_id* exists in the database."""
-    records = run_query(
-        driver,
-        "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id",
-        {"id": beam_id},
-    )
-    return bool(records)
 
 
 async def _retrieve_line_item(
@@ -103,7 +104,12 @@ async def _retrieve_line_item(
     return {"links": links, "data": data.model_dump()}
 
 
-@router.post("", status_code=201, response_model=LineItemCreateResponse)
+@router.post(
+    "",
+    status_code=201,
+    response_model=LineItemCreateResponse,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 def create_line_item(
     beam_id: int,
     payload: LineItemCreate,
@@ -133,28 +139,15 @@ def create_line_item(
         {"id": 12}
     """
     logger.info(f"Creating line item with name: {payload.name} for beam line {beam_id}")
-    beam_records = run_query(
-        driver,
-        "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id",
-        {"id": beam_id},
-    )
-    if not beam_records:
-        raise HTTPException(status_code=404, detail="Beam line does not exist")
 
-    if exists_any_name(driver, payload.name):
-        raise HTTPException(
-            status_code=409,
-            detail="Item with this name already exists",
-        )
-
-    if _has_duplicate_adjacent_index(payload):
+    if has_duplicate_adjacent_index(payload.adjacents):
         raise HTTPException(
             status_code=400,
             detail="Adjacent item with the same index already exists",
         )
 
     adjacent_ids = [adjacent.id for adjacent in payload.adjacents]
-    if not _line_item_ids_exist(driver, adjacent_ids + payload.connections):
+    if not adj_and_conn_items_exist(driver, adjacent_ids + payload.connections):
         raise HTTPException(
             status_code=404,
             detail="Previous, next or connected item does not exist",
@@ -201,8 +194,6 @@ def list_line_items(
         f"name filter: {name}, kind filter: {kind}, "
         f"status: {status.value if status else None}"
     )
-    if not _beam_line_exists(driver, beam_id):
-        raise HTTPException(status_code=404, detail="Beam line does not exist")
 
     if sort:
         for key in sort:
@@ -326,7 +317,11 @@ async def get_line_item(
     )
 
 
-@router.patch("/{item_id}", status_code=204)
+@router.patch(
+    "/{item_id}",
+    status_code=204,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 async def patch_line_item(
     beam_id: int,
     item_id: int,
@@ -344,11 +339,6 @@ async def patch_line_item(
     already taken.
     """
     logger.info(f"Updating line item with ID: {item_id} for beam line {beam_id}")
-    if payload.name and exists_any_name(driver, payload.name, exclude_id=item_id):
-        raise HTTPException(
-            status_code=409,
-            detail="An item with the same name already exists",
-        )
 
     update_clauses: list[str] = []
     parameters: dict[str, object] = {"beam_id": beam_id, "id": item_id}
@@ -416,8 +406,6 @@ async def delete_line_item(
     logger.info(
         f"Deleting line item with ID: {item_id} for beam line {beam_id}, force: {force}"
     )
-    if not _beam_line_exists(driver, beam_id):
-        raise HTTPException(status_code=404, detail="Beam line does not exist")
 
     query = (
         "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "

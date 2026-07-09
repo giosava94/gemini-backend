@@ -33,3 +33,11 @@ def ensure_no_nested_dicts(value: dict[str, Any]) -> dict[str, Any]:
 
 
 NonNestedDict = Annotated[dict[str, Any], AfterValidator(ensure_no_nested_dicts)]
+
+
+def drop_duplicates_int(v: list[int]) -> list[int]:
+    """Validator to remove duplicated values"""
+    return list(set(v))
+
+
+ListIntNoDuplicates = Annotated[list[int], AfterValidator(drop_duplicates_int)]

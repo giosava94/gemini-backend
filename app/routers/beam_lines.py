@@ -7,7 +7,7 @@ from typing import Annotated, Any
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import run_query, find_by_id, exists_any_name
+from app.db import run_query, find_by_id
 from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     BeamLineCreate,
@@ -16,8 +16,14 @@ from app.schemas import (
     BeamLineListResponse,
     BeamLineUpdate,
 )
-from app.dependencies import get_driver, get_logger, get_redis_client
+from app.dependencies import (
+    check_name_uniqueness,
+    get_driver,
+    get_logger,
+    get_redis_client,
+)
 from app.cruds.beam_lines import create
+from app.schemas.beam_lines import BeamLineCreateResponse
 
 router = APIRouter(prefix="/api/v1/beam-lines", tags=["beam-lines"])
 
@@ -35,7 +41,12 @@ async def _retrieve_beam_line(driver: Driver, beam_id: int) -> dict[str, Any]:
     return {"links": links, "data": data}
 
 
-@router.post("", status_code=201)
+@router.post(
+    "",
+    status_code=201,
+    response_model=BeamLineCreateResponse,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 def create_beam_line(
     payload: BeamLineCreate,
     driver: Driver = Depends(get_driver),
@@ -57,11 +68,6 @@ def create_beam_line(
         {"id": 1}
     """
     logger.info(f"Creating beam line with name: {payload.name}")
-
-    if exists_any_name(driver, payload.name):
-        raise HTTPException(
-            status_code=409, detail="Item with this name already exists"
-        )
 
     records = create(driver, payload)
     if not records:
@@ -102,6 +108,7 @@ def list_beam_lines(
     count_query = f"MATCH (b:BeamLine) {where_clause} RETURN count(b) AS total"
     total_records = run_query(driver, count_query, {"name": name})
     total = total_records[0]["total"] if total_records else 0
+
     order_clause = "ORDER BY toLower(b.name)" if sort and "name" in sort else ""
     query = (
         f"MATCH (b:BeamLine) {where_clause} "
@@ -166,7 +173,11 @@ async def get_beam_line(
     )
 
 
-@router.patch("/{beam_id}", status_code=204)
+@router.patch(
+    "/{beam_id}",
+    status_code=204,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 async def patch_beam_line(
     beam_id: int,
     payload: BeamLineUpdate,
@@ -183,10 +194,7 @@ async def patch_beam_line(
     already taken by another node.
     """
     logger.info(f"Updating beam line with ID: {beam_id}")
-    if payload.name and exists_any_name(driver, payload.name, exclude_id=beam_id):
-        raise HTTPException(
-            status_code=409, detail="An item with the same name already exists"
-        )
+
     update_clauses: list[str] = []
     parameters: dict[str, object] = {"id": beam_id}
     if payload.name is not None:

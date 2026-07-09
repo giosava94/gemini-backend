@@ -13,6 +13,12 @@ class BeamLineCreate(BaseModel):
     ] = None
 
 
+class BeamLineCreateResponse(BaseModel):
+    """Response model for creating a new beam line."""
+
+    id: Annotated[int, Field(..., description="Auto-generated item ID")]
+
+
 class BeamLineUpdate(BaseModel):
     """Request model for updating a beam line."""
 
