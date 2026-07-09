@@ -8,6 +8,8 @@ and the application logger.
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 import logging
+
+import redis.asyncio as redis
 from app.config import get_settings
 from app.db import create_driver, close_driver, ensure_constraints
 from app.routers.beam_lines import router as beam_line_router
@@ -44,12 +46,28 @@ async def lifespan(app: FastAPI):
     ensure_constraints(driver)
     app.driver = driver  # pyright: ignore[reportAttributeAccessIssue]
 
+    # Initialize Redis client
+    redis_client = None
+    if settings.redis_enabled:
+        redis_client = redis.Redis(host=settings.redis_host, decode_responses=True)
+        try:
+            await redis_client.ping()
+            logger.info("Redis client initialized and connected")
+        except redis.ConnectionError as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            redis_client = None
+    app.redis_client = redis_client  # pyright: ignore[reportAttributeAccessIssue]
+
     logger.info("Application startup complete")
     yield
 
     # Shutdown
     logger.info("Application shutting down")
+
     close_driver(driver)
+
+    if redis_client:
+        await redis_client.close()
 
 
 app = FastAPI(title="Gemini Backend", version="0.1.0", lifespan=lifespan)
