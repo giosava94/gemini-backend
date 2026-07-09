@@ -3,12 +3,12 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated
+from typing import Annotated, Any
 import logging
 import redis.asyncio as redis
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.db import run_query, find_by_id, exists_any_name
-from app.redis import fetch_redis_cache, invalidate_redis_cache, update_redis_cache
+from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     BeamLineCreate,
     BeamLineData,
@@ -19,6 +19,19 @@ from app.schemas import (
 from app.dependencies import get_driver, get_logger, get_redis_client
 
 router = APIRouter(prefix="/api/v1/beam-lines", tags=["beam-lines"])
+
+
+async def _retrieve_beam_line(driver: Driver, beam_id: int) -> dict[str, Any]:
+    item = find_by_id(driver, beam_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
+    data = {
+        "id": item["id"],
+        "name": item["name"],
+        "description": item.get("description"),
+    }
+    links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
+    return {"links": links, "data": data}
 
 
 @router.post("", status_code=201)
@@ -121,7 +134,6 @@ async def get_beam_line(
     driver: Driver = Depends(get_driver),
     logger: logging.Logger = Depends(get_logger),
     redis_client: redis.Redis | None = Depends(get_redis_client),
-    settings: Settings = Depends(get_settings),
 ):
     """Retrieve a single beam line by its ID.
 
@@ -131,31 +143,16 @@ async def get_beam_line(
     """
     logger.info(f"Fetching beam line with ID: {beam_id}")
 
-    redis_key = f"beam_line:{beam_id}"
-    data = None
-
     # Check Redis
     if redis_client:
-        data = await fetch_redis_cache(redis_client, redis_key, logger)
-
-    # Fetch from database if not cached
-    if not data:
-        item = find_by_id(driver, beam_id)
-        if not item:
-            raise HTTPException(status_code=404, detail="Target item does not exist")
-        item_data = {
-            "id": item["id"],
-            "name": item["name"],
-            "description": item.get("description"),
-        }
-        links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
-        data = {"links": links, "data": item_data}
-
-        # Store in Redis
-        if redis_client:
-            await update_redis_cache(
-                redis_client, redis_key, settings.redis_exp_time, data, logger
-            )
+        data = await get_with_lock(
+            redis_client,
+            f"beam_line:{beam_id}",
+            lambda: _retrieve_beam_line(driver, beam_id),
+            logger,
+        )
+    else:
+        data = await _retrieve_beam_line(driver, beam_id)
 
     # HTTP cache headers + ETag
     data_str = json.dumps(data, sort_keys=True)
@@ -173,7 +170,7 @@ async def get_beam_line(
         media_type="application/json",
         headers={
             "ETag": etag,
-            "Cache-Control": f"public, max-age={settings.browser_cache_exp_time}",
+            "Cache-Control": f"public, max-age={get_settings().browser_cache_exp_time}",
         },
     )
 

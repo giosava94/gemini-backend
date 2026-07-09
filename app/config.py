@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     redis_exp_time: Annotated[int, Field(description="Caching expiration time")] = (
         3600  # 1h
     )
+    redis_lock_exp_time: Annotated[
+        int, Field(description="Redis lock expiration time")
+    ] = 10  # 10s
     browser_cache_exp_time: Annotated[
         int, Field(description="Broswer caching expiration time")
     ] = 1800  # 30m
