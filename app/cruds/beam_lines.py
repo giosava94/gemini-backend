@@ -15,9 +15,10 @@ def create_beam_line_record(driver: Driver, payload: BeamLineCreate) -> list:
         "CREATE (b:BeamLine {id: nextId, name: $name, description: $description}) "
         "RETURN b.id AS id"
     )
-    return run_query(
+    records = run_query(
         driver, query, {"name": payload.name, "description": payload.description}
     )
+    return records
 
 
 def get_total_beam_line_records(driver: Driver, params: dict[str, Any]):
@@ -66,3 +67,20 @@ async def get_beam_line_record(driver: Driver, beam_id: int) -> dict[str, Any] |
     )
     links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
     return {"links": links, "data": data}
+
+
+def get_beam_line_relationships(driver: Driver, beam_id: int):
+    query = (
+        "MATCH (b:BeamLine {id: $id}) "
+        "OPTIONAL MATCH (b)-[r:HAS_LINE_ITEM]->(:LineItem) "
+        "RETURN count(r) AS linked_count"
+    )
+    records = run_query(driver, query, {"id": beam_id})
+    return records
+
+
+def delete_beam_line_record(driver: Driver, beam_id: int):
+    records = run_query(
+        driver, "MATCH (b:BeamLine {id: $id}) DETACH DELETE b", {"id": beam_id}
+    )
+    return records

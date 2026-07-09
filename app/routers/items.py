@@ -24,8 +24,10 @@ from app.schemas import (
 )
 from app.cruds.items import (
     create,
+    delete_item_record,
     get_item_record,
     get_item_records,
+    get_item_relationships,
     get_total_item_records,
     conn_items_exist,
 )
@@ -245,33 +247,18 @@ async def delete_item(
     """
     logger.info(f"Deleting item with ID: {item_id}, force: {force}")
 
-    records = run_query(
-        driver,
-        (
-            "MATCH (i:Item {id: $id}) "
-            "OPTIONAL MATCH (i)-[rel:CONNECTED_TO]->() "
-            "RETURN i.id AS id, count(rel) AS linked_count"
-        ),
-        {"id": item_id},
-    )
-    if not records or records[0]["id"] is None:
+    records = get_item_relationships(driver, item_id)
+    if not records:
         return None
 
     linked_count = records[0]["linked_count"]
     if linked_count and not force:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Can't delete an item with connected items; "
-                "set force to true to override"
-            ),
+            detail="Can't delete an item with connected items; set force to true to override",
         )
 
-    run_query(
-        driver,
-        "MATCH (i:Item {id: $id}) DETACH DELETE i",
-        {"id": item_id},
-    )
+    delete_item_record(driver, item_id)
 
     # Invalidate redis cache
     if redis_client:

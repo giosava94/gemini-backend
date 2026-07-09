@@ -105,6 +105,23 @@ async def get_item_record(driver: Driver, item_id: int) -> dict[str, Any] | None
     return {"links": links, "data": data.model_dump()}
 
 
+def get_item_relationships(driver: Driver, item_id: int):
+    query = (
+        "MATCH (i:Item {id: $id}) "
+        "OPTIONAL MATCH (i)-[rel:CONNECTED_TO]->() "
+        "RETURN i.id AS id, count(rel) AS linked_count"
+    )
+    records = run_query(driver, query, {"id": item_id})
+    return records
+
+
+def delete_item_record(driver: Driver, item_id: int):
+    records = run_query(
+        driver, "MATCH (i:Item {id: $id}) DETACH DELETE i", {"id": item_id}
+    )
+    return records
+
+
 def conn_items_exist(driver: Driver, ids: list[int]) -> bool:
     """Return True if every ID in *ids* belongs to an existing Item or LineItem node."""
     distinct_ids = list(set(ids))

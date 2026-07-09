@@ -26,8 +26,10 @@ from app.schemas import (
 )
 from app.cruds.line_items import (
     create,
+    delete_line_item_record,
     get_line_item_record,
     get_line_item_records,
+    get_line_item_relationships,
     get_total_line_item_records,
     has_duplicate_adjacent_index,
     adj_and_conn_items_exist,
@@ -314,14 +316,7 @@ async def delete_line_item(
         f"Deleting line item with ID: {item_id} for beam line {beam_id}, force: {force}"
     )
 
-    query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
-        "OPTIONAL MATCH (li)-[outgoing]-(:LineItem) "
-        "WITH li, [rel IN collect(outgoing) "
-        "WHERE type(rel) IN ['PREVIOUS', 'NEXT', 'CONNECTED_TO']] AS links "
-        "RETURN li.id AS id, size(links) AS linked_count"
-    )
-    records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})
+    records = get_line_item_relationships(driver, beam_id, item_id)
     if not records:
         return None
 
@@ -329,21 +324,10 @@ async def delete_line_item(
     if linked_count and not force:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Can't delete an item with a previous or next item; "
-                "set force to true to override"
-            ),
+            detail="Can't delete an item with a previous or next item; set force to true to override",
         )
 
-    run_query(
-        driver,
-        (
-            "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-            "(li:LineItem {id: $id}) "
-            "DETACH DELETE li"
-        ),
-        {"beam_id": beam_id, "id": item_id},
-    )
+    delete_line_item_record(driver, beam_id, item_id)
 
     # Invalidate redis cache
     if redis_client:

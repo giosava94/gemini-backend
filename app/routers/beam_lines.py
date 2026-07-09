@@ -23,7 +23,9 @@ from app.dependencies import (
 )
 from app.cruds.beam_lines import (
     create_beam_line_record,
+    delete_beam_line_record,
     get_beam_line_records,
+    get_beam_line_relationships,
     get_total_beam_line_records,
     get_beam_line_record,
 )
@@ -215,21 +217,19 @@ async def delete_beam_line(
     the node together with all its relationships.
     """
     logger.info(f"Deleting beam line with ID: {beam_id}, force: {force}")
-    query = (
-        "MATCH (b:BeamLine {id: $id}) "
-        "OPTIONAL MATCH (b)-[r:HAS_LINE_ITEM]->(:LineItem) "
-        "RETURN count(r) AS linked_count"
-    )
-    records = run_query(driver, query, {"id": beam_id})
+
+    records = get_beam_line_relationships(driver, beam_id)
     if not records:
-        raise HTTPException(status_code=404, detail="Target item does not exist")
+        return None
+
     linked_count = records[0]["linked_count"]
     if linked_count and not force:
         raise HTTPException(
             status_code=409,
             detail="Can't delete an item with line items; set force to true to override",
         )
-    run_query(driver, "MATCH (b:BeamLine {id: $id}) DETACH DELETE b", {"id": beam_id})
+
+    delete_beam_line_record(driver, beam_id)
 
     # Invalidate redis cache
     if redis_client:

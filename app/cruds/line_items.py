@@ -148,6 +148,28 @@ async def get_line_item_record(
     return {"links": links, "data": data.model_dump()}
 
 
+def get_line_item_relationships(driver: Driver, beam_id: int, line_item_id: int):
+    query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
+        "OPTIONAL MATCH (li)-[outgoing]-(:LineItem) "
+        "WITH li, [rel IN collect(outgoing) "
+        "WHERE type(rel) IN ['PREVIOUS', 'NEXT', 'CONNECTED_TO']] AS links "
+        "RETURN li.id AS id, size(links) AS linked_count"
+    )
+    records = run_query(driver, query, {"beam_id": beam_id, "id": line_item_id})
+    return records
+
+
+def delete_line_item_record(driver: Driver, beam_id: int, line_item_id: int):
+    query = (
+        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
+        "(li:LineItem {id: $id}) "
+        "DETACH DELETE li"
+    )
+    records = run_query(driver, query, {"beam_id": beam_id, "id": line_item_id})
+    return records
+
+
 def adj_and_conn_items_exist(driver: Driver, ids: list[int]) -> bool:
     """Return True if every distinct ID in *ids* belongs to an existing LineItem node."""
     distinct_ids = list(set(ids))
