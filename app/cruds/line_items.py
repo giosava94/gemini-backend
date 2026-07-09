@@ -3,6 +3,7 @@ from typing import Any
 from neo4j import Driver
 
 from app.db import run_query
+from app.schemas.line_item_adjacents import LineItemAdjacent
 from app.schemas.line_items import LineItemCreate, LineItemData, LineItemDetailData
 
 
@@ -145,3 +146,37 @@ async def get_line_item_record(
         "connections": f"{base_url}/connections",
     }
     return {"links": links, "data": data.model_dump()}
+
+
+def adj_and_conn_items_exist(driver: Driver, ids: list[int]) -> bool:
+    """Return True if every distinct ID in *ids* belongs to an existing LineItem node."""
+    distinct_ids = list(set(ids))
+    if not distinct_ids:
+        return True
+    query = (
+        "MATCH (li:LineItem) "
+        "WHERE li.id IN $ids "
+        "RETURN count(DISTINCT li.id) = size($ids) AS all_exist"
+    )
+    records = run_query(driver, query, {"ids": distinct_ids})
+    return bool(records and records[0]["all_exist"])
+
+
+def has_duplicate_adjacent_index(items: list[LineItemAdjacent]) -> bool:
+    """Return True if *items* contains two entries sharing the same (position, index) pair."""
+    seen: set[tuple[str, int]] = set()
+    for adjacent in items:
+        if adjacent.index is None:
+            continue
+        key = (adjacent.position.value, adjacent.index)
+        if key in seen:
+            return True
+        seen.add(key)
+    return False
+
+
+def beam_line_exists(driver: Driver, beam_id: int) -> bool:
+    records = run_query(
+        driver, "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id", {"id": beam_id}
+    )
+    return bool(records)

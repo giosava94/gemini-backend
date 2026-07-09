@@ -27,23 +27,10 @@ from app.cruds.items import (
     get_item_record,
     get_item_records,
     get_total_item_records,
+    conn_items_exist,
 )
 
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
-
-
-def conn_items_exist(driver: Driver, ids: list[int]) -> bool:
-    """Return True if every ID in *ids* belongs to an existing Item or LineItem node."""
-    distinct_ids = list(set(ids))
-    if not distinct_ids:
-        return True
-    query = (
-        "UNWIND $ids AS id "
-        "OPTIONAL MATCH (n) WHERE (n:Item) AND n.id = id "
-        "RETURN count(n) = size($ids) AS all_exist"
-    )
-    records = run_query(driver, query, {"ids": distinct_ids})
-    return bool(records and records[0]["all_exist"])
 
 
 @router.post(

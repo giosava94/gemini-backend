@@ -17,7 +17,6 @@ from app.dependencies import (
 from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas import (
     LINE_ITEM_KIND_LOOKUP,
-    LineItemAdjacent,
     LineItemCreate,
     LineItemCreateResponse,
     LineItemDetailResponse,
@@ -30,14 +29,14 @@ from app.cruds.line_items import (
     get_line_item_record,
     get_line_item_records,
     get_total_line_item_records,
+    has_duplicate_adjacent_index,
+    adj_and_conn_items_exist,
+    beam_line_exists,
 )
 
 
 def check_beam_line_exists(beam_id: int, driver: Driver = Depends(get_driver)):
-    records = run_query(
-        driver, "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id", {"id": beam_id}
-    )
-    if not records:
+    if not beam_line_exists(driver, beam_id):
         raise HTTPException(status_code=404, detail="Beam line does not exist")
 
 
@@ -46,33 +45,6 @@ router = APIRouter(
     tags=["line-items"],
     dependencies=[Depends(check_beam_line_exists)],
 )
-
-
-def adj_and_conn_items_exist(driver: Driver, ids: list[int]) -> bool:
-    """Return True if every distinct ID in *ids* belongs to an existing LineItem node."""
-    distinct_ids = list(set(ids))
-    if not distinct_ids:
-        return True
-    query = (
-        "MATCH (li:LineItem) "
-        "WHERE li.id IN $ids "
-        "RETURN count(DISTINCT li.id) = size($ids) AS all_exist"
-    )
-    records = run_query(driver, query, {"ids": distinct_ids})
-    return bool(records and records[0]["all_exist"])
-
-
-def has_duplicate_adjacent_index(items: list[LineItemAdjacent]) -> bool:
-    """Return True if *items* contains two entries sharing the same (position, index) pair."""
-    seen: set[tuple[str, int]] = set()
-    for adjacent in items:
-        if adjacent.index is None:
-            continue
-        key = (adjacent.position.value, adjacent.index)
-        if key in seen:
-            return True
-        seen.add(key)
-    return False
 
 
 @router.post(

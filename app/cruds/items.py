@@ -103,3 +103,17 @@ async def get_item_record(driver: Driver, item_id: int) -> dict[str, Any] | None
     )
     links = {"connections": f"/api/v1/items/{item_id}/connections"}
     return {"links": links, "data": data.model_dump()}
+
+
+def conn_items_exist(driver: Driver, ids: list[int]) -> bool:
+    """Return True if every ID in *ids* belongs to an existing Item or LineItem node."""
+    distinct_ids = list(set(ids))
+    if not distinct_ids:
+        return True
+    query = (
+        "UNWIND $ids AS id "
+        "OPTIONAL MATCH (n) WHERE (n:Item) AND n.id = id "
+        "RETURN count(n) = size($ids) AS all_exist"
+    )
+    records = run_query(driver, query, {"ids": distinct_ids})
+    return bool(records and records[0]["all_exist"])
