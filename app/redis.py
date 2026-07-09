@@ -9,6 +9,32 @@ from app.config import get_settings
 
 WTIME = 0.1  # Lock waiting time 0.1s
 
+logger = logging.getLogger("gemini_backend.redis")
+
+
+async def create_redis_client() -> redis.Redis | None:
+    logger.debug("Creating Redis client...")
+    s = get_settings()
+    redis_client = redis.Redis(host=s.redis_host, decode_responses=True)
+    try:
+        await redis_client.ping()
+        logger.info("Redis client initialized and connected")
+        return redis_client
+    except redis.ConnectionError as e:
+        logger.error(f"Failed to connect to Redis: {e}")
+
+
+async def close_redis_connection(redis_client: redis.Redis | None) -> None:
+    """Close the Redis client connection.
+
+    A no-op when *redis_client* is ``None`` (e.g. if startup failed before the
+    driver was created).
+    """
+    if redis_client is not None:
+        logger.debug("Closing Redis client connection...")
+        await redis_client.close()
+        logger.info("Redis client connection closed")
+
 
 async def fetch_redis_cache(
     redis_client: redis.Redis, key: str, logger: logging.Logger
