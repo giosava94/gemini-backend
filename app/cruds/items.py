@@ -149,7 +149,7 @@ def delete_item_record(driver: Driver, item_id: int):
 
 
 def conn_items_exist(driver: Driver, ids: list[int]) -> bool:
-    """Return True if every ID in *ids* belongs to an existing Item or LineItem node."""
+    """Return True if every ID in *ids* belongs to an existing Item node."""
     distinct_ids = list(set(ids))
     if not distinct_ids:
         return True
