@@ -17,9 +17,21 @@ from app.schemas.line_item_connections import (
     LineItemConnectionsUpdate,
 )
 
+
+def check_beam_line_and_line_item_exist(
+    beam_id: int, item_id: int, driver: Driver = Depends(get_driver)
+):
+    if not beam_line_and_line_item_exist(driver, beam_id, item_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Beam line or current line item do not exist",
+        )
+
+
 router = APIRouter(
     prefix="/api/v1/beam-lines/{beam_id}/line-items/{item_id}/connections",
     tags=["line-item-connections"],
+    dependencies=[Depends(check_beam_line_and_line_item_exist)],
 )
 
 
@@ -37,12 +49,6 @@ def list_line_item_connections(
         f"Listing connections for line item {item_id} on beam line {beam_id} - "
         f"page: {page}, per_page: {per_page}"
     )
-
-    if not beam_line_and_line_item_exist(driver, beam_id, item_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Beam line or current line item do not exist",
-        )
 
     total = get_total_line_item_connections(driver, beam_id, item_id)
     data = get_line_item_connections(driver, beam_id, item_id)
@@ -73,13 +79,6 @@ def put_line_item_connections(
     if len(target_ids) != len(set(target_ids)):
         raise HTTPException(status_code=400, detail="Duplicated items in the list")
 
-    # Verify beam line and current line item exist
-    if not beam_line_and_line_item_exist(driver, beam_id, item_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Beam line, current item or at least one of the linked items do not exist",
-        )
-
     # Verify all target IDs exist as Item nodes
     if not conn_items_exist(driver, target_ids):
         raise HTTPException(
@@ -106,12 +105,6 @@ def delete_line_item_connections(
         f"Disconnecting connections from line item {item_id} on beam line {beam_id}: "
         f"{payload.items}"
     )
-
-    if not beam_line_and_line_item_exist(driver, beam_id, item_id):
-        raise HTTPException(
-            status_code=404,
-            detail="Beam line or current line item do not exist",
-        )
 
     disconnect_line_item_connected_records(driver, beam_id, item_id, payload.items)
 
