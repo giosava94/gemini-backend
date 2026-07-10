@@ -155,7 +155,7 @@ def conn_items_exist(driver: Driver, ids: list[int]) -> bool:
         return True
     query = (
         "UNWIND $ids AS id "
-        "OPTIONAL MATCH (n) WHERE (n:Item) AND n.id = id "
+        "OPTIONAL MATCH (n:Item {id: id}) "
         "RETURN count(n) = size($ids) AS all_exist"
     )
     records = run_query(driver, query, {"ids": distinct_ids})

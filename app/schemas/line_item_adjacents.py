@@ -2,6 +2,8 @@ from enum import Enum
 from typing import Annotated
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.common import ListIntNoDuplicates
+
 
 class AdjacentPosition(str, Enum):
     """Allowed adjacent line item positions."""
@@ -63,7 +65,7 @@ class LineItemAdjacentsDelete(BaseModel):
     """Request model for disconnecting adjacent line items."""
 
     items: Annotated[
-        list[int],
+        ListIntNoDuplicates,
         Field(..., min_length=1, description="List of line item IDs to disconnect"),
     ]
 

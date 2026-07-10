@@ -93,9 +93,6 @@ def delete_item_connections(
     """Disconnect one or multiple non-line items from the current item."""
     logger.info(f"Disconnecting connections from item {item_id}: {payload.items}")
 
-    if len(payload.items) != len(set(payload.items)):
-        raise HTTPException(status_code=400, detail="Duplicated items in the list")
-
     if not item_exists(driver, item_id):
         raise HTTPException(status_code=404, detail="Current item does not exist")
 
