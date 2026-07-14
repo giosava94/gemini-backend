@@ -67,7 +67,7 @@ def create_item(
     """
     logger.info(f"Creating item with name: {payload.name}")
 
-    if conn_items_exist(driver, payload.connections):
+    if not conn_items_exist(driver, payload.connections):
         raise HTTPException(
             status_code=404,
             detail="At least one item that should be connected does not exist",
