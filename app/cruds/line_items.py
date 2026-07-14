@@ -3,24 +3,9 @@ from typing import Any
 from neo4j import Driver
 
 from app.db import run_query
-from app.schemas.line_item_adjacents import LineItemAdjacent
-from app.schemas.line_items import (
-    LineItemCreate,
-    LineItemData,
-    LineItemDetailData,
-    LineItemUpdate,
-)
 
 
-def create(driver: Driver, payload: LineItemCreate, beam_id: int) -> list:
-    adjacents = [
-        {
-            "id": adjacent.id,
-            "position": adjacent.position.value,
-            "index": adjacent.index,
-        }
-        for adjacent in payload.adjacents
-    ]
+def create(driver: Driver, payload: dict[str, Any], beam_id: int) -> list:
     query = (
         "MATCH (beam:BeamLine {id: $beam_id}) "
         "MERGE (c:Counter {name: 'lineitem'}) "
@@ -59,14 +44,14 @@ def create(driver: Driver, payload: LineItemCreate, beam_id: int) -> list:
         query,
         {
             "beam_id": beam_id,
-            "name": payload.name,
-            "description": payload.description,
-            "kind": payload.kind.value,
-            "status": payload.status.value,
-            "labels": payload.labels,
-            "aliases": payload.aliases,
-            "adjacents": adjacents,
-            "connections": list(set(payload.connections)),
+            "name": payload.get("name"),
+            "description": payload.get("description"),
+            "kind": payload.get("kind"),
+            "status": payload.get("status"),
+            "labels": payload.get("labels"),
+            "aliases": payload.get("aliases"),
+            "adjacents": payload.get("adjacents"),
+            "connections": list(set(payload.get("connections", []))),
         },
     )
 
@@ -115,11 +100,11 @@ def get_line_item_records(driver: Driver, params: dict[str, Any], **kwargs):
         driver, query, {**params, "skip": skip, "limit": kwargs["per_page"]}
     )
     return [
-        LineItemData(
-            id=record["li"]["id"],
-            name=record["li"]["name"],
-            description=record["li"].get("description"),
-        ).model_dump()
+        {
+            "id": record["li"]["id"],
+            "name": record["li"]["name"],
+            "description": record["li"].get("description"),
+        }
         for record in records
     ]
 
@@ -136,46 +121,40 @@ async def get_line_item_record(
         return None
 
     item = records[0]["li"]
-    data = LineItemDetailData(
-        id=item.get("id"),
-        name=item.get("name"),
-        description=item.get("description"),
-        kind=item.get("kind"),
-        status=item.get("status"),
-        labels=item.get("labels", []),
-        aliases=item.get("aliases", []),
-    )
+    data = {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "description": item.get("description"),
+        "kind": item.get("kind"),
+        "status": item.get("status"),
+        "labels": item.get("labels", []),
+        "aliases": item.get("aliases", []),
+    }
     base_url = f"/api/v1/beam-lines/{beam_id}/line-items/{item_id}"
     links = {
         "adjacents": f"{base_url}/adjacents",
         "connections": f"{base_url}/connections",
     }
-    return {"links": links, "data": data.model_dump()}
+    return {"links": links, "data": data}
 
 
 def update_line_item_record(
-    driver: Driver, payload: LineItemUpdate, beam_id: int, line_item_id: int
+    driver: Driver, payload: dict[str, Any], beam_id: int, line_item_id: int
 ):
+    parameters = {"beam_id": beam_id, "id": line_item_id, **payload}
     update_clauses: list[str] = []
-    parameters: dict[str, object] = {"beam_id": beam_id, "id": line_item_id}
-    if payload.name is not None:
+    if payload.get("name") is not None:
         update_clauses.append("li.name = $name")
-        parameters["name"] = payload.name
-    if payload.description is not None:
+    if payload.get("description") is not None:
         update_clauses.append("li.description = $description")
-        parameters["description"] = payload.description
-    if payload.status is not None:
+    if payload.get("status") is not None:
         update_clauses.append("li.status = $status")
-        parameters["status"] = payload.status.value
-    if payload.kind is not None:
+    if payload.get("kind") is not None:
         update_clauses.append("li.kind = $kind")
-        parameters["kind"] = payload.kind.value
-    if payload.labels is not None:
+    if payload.get("labels") is not None:
         update_clauses.append("li.labels = $labels")
-        parameters["labels"] = payload.labels
-    if payload.aliases is not None:
+    if payload.get("aliases") is not None:
         update_clauses.append("li.aliases = $aliases")
-        parameters["aliases"] = payload.aliases
 
     query = (
         "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
@@ -223,13 +202,13 @@ def adj_and_conn_items_exist(driver: Driver, ids: list[int]) -> bool:
     return bool(records and records[0]["all_exist"])
 
 
-def has_duplicate_adjacent_index(items: list[LineItemAdjacent]) -> bool:
+def has_duplicate_adjacent_index(items: list[dict]) -> bool:
     """Return True if *items* contains two entries sharing the same (position, index) pair."""
-    seen: set[tuple[str, int]] = set()
+    seen: set[tuple] = set()
     for adjacent in items:
-        if adjacent.index is None:
+        if adjacent.get("index") is None:
             continue
-        key = (adjacent.position.value, adjacent.index)
+        key = (adjacent.get("position"), adjacent.get("index"))
         if key in seen:
             return True
         seen.add(key)

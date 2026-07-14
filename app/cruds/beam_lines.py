@@ -3,15 +3,9 @@ from typing import Any
 from neo4j import Driver
 
 from app.db import run_query
-from app.schemas.beam_lines import (
-    BeamLineCreate,
-    BeamLineData,
-    BeamLineDetailData,
-    BeamLineUpdate,
-)
 
 
-def create_beam_line_record(driver: Driver, payload: BeamLineCreate) -> list:
+def create_beam_line_record(driver: Driver, payload: dict[str, Any]) -> list:
     query = (
         "MERGE (c:Counter {name: 'beamline'}) "
         "ON CREATE SET c.value = 0 "
@@ -20,9 +14,7 @@ def create_beam_line_record(driver: Driver, payload: BeamLineCreate) -> list:
         "CREATE (b:BeamLine {id: nextId, name: $name, description: $description}) "
         "RETURN b.id AS id"
     )
-    records = run_query(
-        driver, query, {"name": payload.name, "description": payload.description}
-    )
+    records = run_query(driver, query, payload)
     return records
 
 
@@ -49,11 +41,11 @@ def get_beam_line_records(driver: Driver, params: dict[str, Any], **kwargs):
         driver, query, {**params, "skip": skip, "limit": kwargs["per_page"]}
     )
     return [
-        BeamLineData(
-            id=record["b"]["id"],
-            name=record["b"]["name"],
-            description=record["b"].get("description"),
-        ).model_dump()
+        {
+            "id": record["b"]["id"],
+            "name": record["b"]["name"],
+            "description": record["b"].get("description"),
+        }
         for record in records
     ]
 
@@ -65,24 +57,22 @@ async def get_beam_line_record(driver: Driver, beam_id: int) -> dict[str, Any] |
         return None
 
     item = records[0]["b"]
-    data = BeamLineDetailData(
-        id=item.get("id"),
-        name=item.get("name"),
-        description=item.get("description"),
-    )
+    data = {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "description": item.get("description"),
+    }
     links = {"line_items": f"/api/v1/beam-lines/{beam_id}/line-items"}
-    return {"links": links, "data": data.model_dump()}
+    return {"links": links, "data": data}
 
 
-def update_beam_line_record(driver: Driver, payload: BeamLineUpdate, beam_id: int):
+def update_beam_line_record(driver: Driver, payload: dict[str, Any], beam_id: int):
+    parameters = {"id": beam_id, **payload}
     update_clauses = []
-    parameters: dict = {"id": beam_id}
-    if payload.name is not None:
+    if payload.get("name") is not None:
         update_clauses.append("b.name = $name")
-        parameters["name"] = payload.name
-    if payload.description is not None:
+    if payload.get("description") is not None:
         update_clauses.append("b.description = $description")
-        parameters["description"] = payload.description
 
     query = f"MATCH (b:BeamLine {{id: $id}}) SET {', '.join(update_clauses)} RETURN b"
     records = run_query(driver, query, parameters)

@@ -85,7 +85,7 @@ def create_line_item(
     """
     logger.info(f"Creating line item with name: {payload.name} for beam line {beam_id}")
 
-    if has_duplicate_adjacent_index(payload.adjacents):
+    if has_duplicate_adjacent_index([i.model_dump() for i in payload.adjacents]):
         raise HTTPException(
             status_code=400,
             detail="Adjacent item with the same index already exists",
@@ -98,7 +98,7 @@ def create_line_item(
             detail="Previous, next or connected item does not exist",
         )
 
-    records = create(driver, payload, beam_id)
+    records = create(driver, payload.model_dump(), beam_id)
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create line item")
 
@@ -249,10 +249,11 @@ async def patch_line_item(
     """
     logger.info(f"Updating line item with ID: {item_id} for beam line {beam_id}")
 
-    if not payload.model_dump(exclude_none=True):
+    data = payload.model_dump(exclude_none=True)
+    if not data:
         return None
 
-    records = update_line_item_record(driver, payload, beam_id, item_id)
+    records = update_line_item_record(driver, data, beam_id, item_id)
     if not records:
         raise HTTPException(
             status_code=404, detail="Beam line or target item does not exist"

@@ -2,12 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from neo4j import Driver
 from typing import Annotated
 import logging
+from app.cruds.line_item_adjacents import (
+    has_duplicate_adjacent_index_in_items,
+    has_duplicate_adjacent_items,
+)
 from app.db import run_query
 from app.dependencies import get_driver, get_logger
 from app.schemas.line_item_adjacents import (
     ADJ_POS_LOOKUP,
     AdjacentPosition,
-    LineItemAdjacent,
     LineItemAdjacentData,
     LineItemAdjacentPatch,
     LineItemAdjacentsDelete,
@@ -16,36 +19,12 @@ from app.schemas.line_item_adjacents import (
 )
 
 router = APIRouter(
-    prefix="/api/v1/beam-lines/{beam_id}/line-items",
+    prefix="/api/v1/beam-lines/{beam_id}/line-items/{item_id}/adjacents",
     tags=["line-item-adjacents"],
 )
 
 
-def _has_duplicate_adjacent_items(items: list[LineItemAdjacent]) -> bool:
-    """Return True if *items* contains two entries with the same (id, position) pair."""
-    seen: set[tuple[int, str]] = set()
-    for adjacent in items:
-        key = (adjacent.id, adjacent.position.value)
-        if key in seen:
-            return True
-        seen.add(key)
-    return False
-
-
-def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> bool:
-    """Return True if *items* contains two entries sharing the same (position, index) pair."""
-    seen: set[tuple[str, int]] = set()
-    for adjacent in items:
-        if adjacent.index is None:
-            continue
-        key = (adjacent.position.value, adjacent.index)
-        if key in seen:
-            return True
-        seen.add(key)
-    return False
-
-
-@router.get("/{item_id}/adjacents", response_model=LineItemAdjacentsListResponse)
+@router.get("", response_model=LineItemAdjacentsListResponse)
 def list_line_item_adjacents(
     beam_id: int,
     item_id: int,
@@ -156,7 +135,7 @@ def list_line_item_adjacents(
     return {"page": page, "per_page": per_page, "total": total, "data": data}
 
 
-@router.put("/{item_id}/adjacents", status_code=201)
+@router.put("", status_code=201)
 def put_line_item_adjacents(
     beam_id: int,
     item_id: int,
@@ -167,8 +146,9 @@ def put_line_item_adjacents(
 ):
     """Add one or multiple adjacent line items to the current one."""
     logger.info(f"Adding adjacents to line item {item_id} for beam line {beam_id}")
-    if _has_duplicate_adjacent_items(payload.items) or (
-        _has_duplicate_adjacent_index_in_items(payload.items)
+    items = [i.model_dump() for i in payload.items]
+    if has_duplicate_adjacent_items(items) or (
+        has_duplicate_adjacent_index_in_items(items)
     ):
         raise HTTPException(
             status_code=400,
@@ -185,8 +165,7 @@ def put_line_item_adjacents(
         )
     target_ids = [item.id for item in payload.items]
     query = (
-        "MATCH (beam:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-        "(current:LineItem {id: $id}) "
+        "MATCH (beam:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(current:LineItem {id: $id}) "
         "WITH beam, current "
         "MATCH (beam)-[:HAS_LINE_ITEM]->(target:LineItem) "
         "WHERE target.id IN $target_ids "
@@ -265,7 +244,7 @@ def put_line_item_adjacents(
     return None
 
 
-@router.delete("/{item_id}/adjacents", status_code=204)
+@router.delete("", status_code=204)
 def delete_line_item_adjacents(
     beam_id: int,
     item_id: int,
@@ -312,7 +291,7 @@ def delete_line_item_adjacents(
     return None
 
 
-@router.patch("/{item_id}/adjacents/{adj_id}", status_code=204)
+@router.patch("/{adj_id}", status_code=204)
 def patch_line_item_adjacent(
     beam_id: int,
     item_id: int,

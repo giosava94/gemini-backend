@@ -62,7 +62,7 @@ def create_beam_line(
     """
     logger.info(f"Creating beam line with name: {payload.name}")
 
-    records = create_beam_line_record(driver, payload)
+    records = create_beam_line_record(driver, payload.model_dump())
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create beam line")
 
@@ -177,10 +177,11 @@ async def patch_beam_line(
     """
     logger.info(f"Updating beam line with ID: {beam_id}")
 
-    if not payload.model_dump(exclude_none=True):
+    data = payload.model_dump(exclude_none=True)
+    if not data:
         return None
 
-    records = update_beam_line_record(driver, payload, beam_id)
+    records = update_beam_line_record(driver, data, beam_id)
     if not records:
         raise HTTPException(status_code=404, detail="Target item does not exist")
 

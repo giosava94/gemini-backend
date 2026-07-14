@@ -1,7 +1,6 @@
 from neo4j import Driver
 
 from app.db import run_query
-from app.schemas.item_connections import ItemConnectionData, ItemLineItemConnectionData
 
 
 def connect_item_records(driver: Driver, item_id: int, connections: list[dict]):
@@ -36,13 +35,13 @@ def get_connected_items(driver: Driver, item_id: int, **kwargs):
         driver, query, {"id": item_id, "skip": skip, "limit": kwargs["per_page"]}
     )
     return [
-        ItemConnectionData(
-            id=record["conn"]["id"],
-            name=record["conn"]["name"],
-            description=record["conn"].get("description"),
-            properties=record.get("rel_props"),
-            link=f"/api/v1/items/{record['conn']['id']}",
-        ).model_dump()
+        {
+            "id": record["conn"]["id"],
+            "name": record["conn"]["name"],
+            "description": record["conn"].get("description"),
+            "properties": record.get("rel_props"),
+            "link": f"/api/v1/items/{record['conn']['id']}",
+        }
         for record in records
     ]
 
@@ -84,14 +83,14 @@ def get_connected_line_items(driver: Driver, item_id: int, **kwargs):
         driver, query, {"id": item_id, "skip": skip, "limit": kwargs["per_page"]}
     )
     return [
-        ItemLineItemConnectionData(
-            id=record["conn"]["id"],
-            name=record["conn"]["name"],
-            description=record["conn"].get("description"),
-            link=(
+        {
+            "id": record["conn"]["id"],
+            "name": record["conn"]["name"],
+            "description": record["conn"].get("description"),
+            "link": (
                 f"/api/v1/beam-lines/{record['beam_id']}"
                 f"/line-items/{record['li']['id']}"
             ),
-        ).model_dump()
+        }
         for record in records
     ]

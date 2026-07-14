@@ -73,7 +73,7 @@ def create_item(
             detail="At least one item that should be connected does not exist",
         )
 
-    records = create(driver, payload)
+    records = create(driver, payload.model_dump())
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create item")
 
@@ -188,10 +188,11 @@ async def patch_item(
     """
     logger.info(f"Updating item with ID: {item_id}")
 
-    if not payload.model_dump(exclude_none=True):
+    data = payload.model_dump(exclude_none=True)
+    if not data:
         return None
 
-    records = update_item_record(driver, payload, item_id)
+    records = update_item_record(driver, data, item_id)
     if not records:
         raise HTTPException(status_code=404, detail="Target item does not exist")
 

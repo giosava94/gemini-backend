@@ -1,7 +1,6 @@
 from neo4j import Driver
 
 from app.db import run_query
-from app.schemas.line_item_connections import LineItemConnectionData
 
 
 def beam_line_and_line_item_exist(driver: Driver, beam_id: int, item_id: int):
@@ -48,13 +47,13 @@ def get_line_item_connections(
         },
     )
     return [
-        LineItemConnectionData(
-            id=record["conn"]["id"],
-            name=record["conn"]["name"],
-            description=record["conn"].get("description"),
-            properties=record.get("rel_props") or {},
-            link=f"/api/v1/items/{record['conn']['id']}",
-        ).model_dump()
+        {
+            "id": record["conn"]["id"],
+            "name": record["conn"]["name"],
+            "description": record["conn"].get("description"),
+            "properties": record.get("rel_props") or {},
+            "link": f"/api/v1/items/{record['conn']['id']}",
+        }
         for record in records
     ]
 

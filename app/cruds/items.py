@@ -3,10 +3,9 @@ from typing import Any
 from neo4j import Driver
 
 from app.db import run_query
-from app.schemas.items import ItemCreate, ItemData, ItemDetailData, ItemUpdate
 
 
-def create(driver: Driver, payload: ItemCreate) -> list:
+def create(driver: Driver, payload: dict[str, Any]) -> list:
     query = (
         "MERGE (c:Counter {name: 'item'}) "
         "ON CREATE SET c.value = 0 "
@@ -29,13 +28,13 @@ def create(driver: Driver, payload: ItemCreate) -> list:
         driver,
         query,
         {
-            "name": payload.name,
-            "description": payload.description,
-            "kind": payload.kind.value,
-            "status": payload.status.value,
-            "labels": payload.labels,
-            "aliases": payload.aliases,
-            "connections": list(set(payload.connections)),
+            "name": payload.get("name"),
+            "description": payload.get("description"),
+            "kind": payload.get("kind"),
+            "status": payload.get("status"),
+            "labels": payload.get("labels"),
+            "aliases": payload.get("aliases"),
+            "connections": list(set(payload.get("connections", []))),
         },
     )
 
@@ -77,11 +76,11 @@ def get_item_records(driver: Driver, params: dict[str, Any], **kwargs):
         {**params, "skip": skip, "limit": kwargs["per_page"]},
     )
     return [
-        ItemData(
-            id=record["i"]["id"],
-            name=record["i"]["name"],
-            description=record["i"].get("description"),
-        ).model_dump()
+        {
+            "id": record["i"]["id"],
+            "name": record["i"]["name"],
+            "description": record["i"].get("description"),
+        }
         for record in records
     ]
 
@@ -92,37 +91,32 @@ async def get_item_record(driver: Driver, item_id: int) -> dict[str, Any] | None
         return None
 
     item = records[0]["i"]
-    data = ItemDetailData(
-        id=item.get("id"),
-        name=item.get("name"),
-        description=item.get("description"),
-        kind=item.get("kind"),
-        status=item.get("status"),
-        labels=item.get("labels", []),
-        aliases=item.get("aliases", []),
-    )
+    data = {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "description": item.get("description"),
+        "kind": item.get("kind"),
+        "status": item.get("status"),
+        "labels": item.get("labels", []),
+        "aliases": item.get("aliases", []),
+    }
     links = {"connections": f"/api/v1/items/{item_id}/connections"}
-    return {"links": links, "data": data.model_dump()}
+    return {"links": links, "data": data}
 
 
-def update_item_record(driver: Driver, payload: ItemUpdate, item_id: int):
+def update_item_record(driver: Driver, payload: dict[str, Any], item_id: int):
+    parameters = {"id": item_id, **payload}
     update_clauses = []
-    parameters: dict = {"id": item_id}
-    if payload.name is not None:
+    if payload.get("name") is not None:
         update_clauses.append("i.name = $name")
-        parameters["name"] = payload.name
-    if payload.description is not None:
+    if payload.get("description") is not None:
         update_clauses.append("i.description = $description")
-        parameters["description"] = payload.description
-    if payload.status is not None:
+    if payload.get("status") is not None:
         update_clauses.append("i.status = $status")
-        parameters["status"] = payload.status.value
-    if payload.labels is not None:
+    if payload.get("labels") is not None:
         update_clauses.append("i.labels = $labels")
-        parameters["labels"] = payload.labels
-    if payload.aliases is not None:
+    if payload.get("aliases") is not None:
         update_clauses.append("i.aliases = $aliases")
-        parameters["aliases"] = payload.aliases
 
     query = (
         f"MATCH (i:Item {{id: $id}}) SET {', '.join(update_clauses)} RETURN i.id AS id"
