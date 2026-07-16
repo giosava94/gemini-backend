@@ -1,0 +1,156 @@
+from typing import Any
+
+from neo4j import Driver
+
+from app.db import run_query
+
+
+def create(driver: Driver, payload: dict[str, Any]) -> list:
+    query = (
+        "MERGE (c:Counter {name: 'item'}) "
+        "ON CREATE SET c.value = 0 "
+        "SET c.value = c.value + 1 "
+        "WITH c.value AS nextId "
+        "CREATE (i:Item {"
+        "id: nextId, name: $name, description: $description, "
+        "kind: $kind, status: $status, labels: $labels, aliases: $aliases"
+        "}) "
+        "WITH i "
+        "CALL (i) { "
+        "UNWIND $connections AS connected_id "
+        "MATCH (target) WHERE (target:Item OR target:LineItem) AND target.id = connected_id "
+        "CREATE (i)-[:CONNECTED_TO]->(target) "
+        "RETURN count(*) AS connection_count "
+        "} "
+        "RETURN i.id AS id"
+    )
+    return run_query(
+        driver,
+        query,
+        {
+            "name": payload.get("name"),
+            "description": payload.get("description"),
+            "kind": payload.get("kind"),
+            "status": payload.get("status"),
+            "labels": payload.get("labels"),
+            "aliases": payload.get("aliases"),
+            "connections": list(set(payload.get("connections", []))),
+        },
+    )
+
+
+def get_total_item_records(driver: Driver, params: dict[str, Any]):
+    where_clause = (
+        "WHERE ($name IS NULL OR toLower(i.name) CONTAINS toLower($name)) "
+        "AND ($alias IS NULL OR ANY(alias IN coalesce(i.aliases, []) "
+        "WHERE toLower(alias) CONTAINS toLower($alias))) "
+    )
+    count_query = f"MATCH (i:Item) {where_clause} RETURN count(i) AS total"
+    total_records = run_query(driver, count_query, params)
+    return total_records[0]["total"] if total_records else 0
+
+
+def get_item_records(driver: Driver, params: dict[str, Any], **kwargs):
+    where_clause = (
+        "WHERE ($name IS NULL OR toLower(i.name) CONTAINS toLower($name)) "
+        "AND ($alias IS NULL OR ANY(alias IN coalesce(i.aliases, []) "
+        "WHERE toLower(alias) CONTAINS toLower($alias))) "
+    )
+
+    sort_clauses = []
+    if kwargs["sort"]:
+        for key in kwargs["sort"]:
+            if key == "name":
+                sort_clauses.append("toLower(i.name)")
+            elif key == "kind":
+                sort_clauses.append("i.kind")
+    order_clause = f"ORDER BY {', '.join(sort_clauses)}" if sort_clauses else ""
+
+    skip = (kwargs["page"] - 1) * kwargs["per_page"]
+    data_query = (
+        f"MATCH (i:Item) {where_clause} RETURN i {order_clause} SKIP $skip LIMIT $limit"
+    )
+    records = run_query(
+        driver,
+        data_query,
+        {**params, "skip": skip, "limit": kwargs["per_page"]},
+    )
+    return [
+        {
+            "id": record["i"]["id"],
+            "name": record["i"]["name"],
+            "description": record["i"].get("description"),
+        }
+        for record in records
+    ]
+
+
+async def get_item_record(driver: Driver, item_id: int) -> dict[str, Any] | None:
+    records = run_query(driver, "MATCH (i:Item {id: $id}) RETURN i", {"id": item_id})
+    if not records:
+        return None
+
+    item = records[0]["i"]
+    data = {
+        "id": item.get("id"),
+        "name": item.get("name"),
+        "description": item.get("description"),
+        "kind": item.get("kind"),
+        "status": item.get("status"),
+        "labels": item.get("labels", []),
+        "aliases": item.get("aliases", []),
+    }
+    links = {"connections": f"/api/v1/items/{item_id}/connections"}
+    return {"links": links, "data": data}
+
+
+def update_item_record(driver: Driver, payload: dict[str, Any], item_id: int):
+    parameters = {"id": item_id, **payload}
+    update_clauses = []
+    if payload.get("name") is not None:
+        update_clauses.append("i.name = $name")
+    if payload.get("description") is not None:
+        update_clauses.append("i.description = $description")
+    if payload.get("status") is not None:
+        update_clauses.append("i.status = $status")
+    if payload.get("labels") is not None:
+        update_clauses.append("i.labels = $labels")
+    if payload.get("aliases") is not None:
+        update_clauses.append("i.aliases = $aliases")
+
+    query = (
+        f"MATCH (i:Item {{id: $id}}) SET {', '.join(update_clauses)} RETURN i.id AS id"
+    )
+    records = run_query(driver, query, parameters)
+    return records
+
+
+def get_item_relationships(driver: Driver, item_id: int):
+    query = (
+        "MATCH (i:Item {id: $id}) "
+        "OPTIONAL MATCH (i)-[rel:CONNECTED_TO]->() "
+        "RETURN i.id AS id, count(rel) AS linked_count"
+    )
+    records = run_query(driver, query, {"id": item_id})
+    return records
+
+
+def delete_item_record(driver: Driver, item_id: int):
+    records = run_query(
+        driver, "MATCH (i:Item {id: $id}) DETACH DELETE i", {"id": item_id}
+    )
+    return records
+
+
+def conn_items_exist(driver: Driver, ids: list[int]) -> bool:
+    """Return True if every ID in *ids* belongs to an existing Item node."""
+    distinct_ids = list(set(ids))
+    if not distinct_ids:
+        return True
+    query = (
+        "UNWIND $ids AS id "
+        "OPTIONAL MATCH (n:Item {id: id}) "
+        "RETURN count(n) = size($ids) AS all_exist"
+    )
+    records = run_query(driver, query, {"ids": distinct_ids})
+    return bool(records and records[0]["all_exist"])

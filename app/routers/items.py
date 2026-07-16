@@ -3,66 +3,44 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated, Any
+from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import exists_any_name, run_query
-from app.dependencies import get_driver, get_logger, get_redis_client
+from app.dependencies import (
+    check_name_uniqueness,
+    get_driver,
+    get_logger,
+    get_redis_client,
+)
 from app.redis import get_with_lock, invalidate_redis_cache
-from app.schemas import (
+from app.schemas.items import (
     ItemCreate,
     ItemCreateResponse,
-    ItemData,
-    ItemDetailData,
     ItemDetailResponse,
     ItemListResponse,
     ItemUpdate,
+)
+from app.cruds.items import (
+    create,
+    delete_item_record,
+    get_item_record,
+    get_item_records,
+    get_item_relationships,
+    get_total_item_records,
+    conn_items_exist,
+    update_item_record,
 )
 
 router = APIRouter(prefix="/api/v1/items", tags=["items"])
 
 
-def _ids_exist(driver: Driver, ids: list[int]) -> bool:
-    """Return True if every ID in *ids* belongs to an existing Item or LineItem node."""
-    distinct_ids = list(set(ids))
-    if not distinct_ids:
-        return True
-    query = (
-        "UNWIND $ids AS id "
-        "OPTIONAL MATCH (n) WHERE (n:Item OR n:LineItem) AND n.id = id "
-        "RETURN count(n) = size($ids) AS all_exist"
-    )
-    records = run_query(driver, query, {"ids": distinct_ids})
-    return bool(records and records[0]["all_exist"])
-
-
-async def _retrieve_item(driver: Driver, item_id: int) -> dict[str, Any]:
-    records = run_query(
-        driver,
-        "MATCH (i:Item {id: $id}) RETURN i",
-        {"id": item_id},
-    )
-    if not records:
-        raise HTTPException(status_code=404, detail="Target item does not exist")
-
-    item = records[0]["i"]
-    data = ItemDetailData(
-        id=item["id"],
-        name=item["name"],
-        description=item.get("description"),
-        kind=item["kind"],
-        status=item["status"],
-        labels=item.get("labels", []),
-        aliases=item.get("aliases", []),
-    )
-    return {
-        "links": {"connections": f"/api/v1/items/{item_id}/connections"},
-        "data": data.model_dump(),
-    }
-
-
-@router.post("", status_code=201, response_model=ItemCreateResponse)
+@router.post(
+    "",
+    status_code=201,
+    response_model=ItemCreateResponse,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 def create_item(
     payload: ItemCreate,
     driver: Driver = Depends(get_driver),
@@ -89,50 +67,16 @@ def create_item(
     """
     logger.info(f"Creating item with name: {payload.name}")
 
-    if exists_any_name(driver, payload.name):
-        raise HTTPException(
-            status_code=409, detail="Item with this name already exists"
-        )
-
-    if payload.connections and not _ids_exist(driver, payload.connections):
+    if not conn_items_exist(driver, payload.connections):
         raise HTTPException(
             status_code=404,
             detail="At least one item that should be connected does not exist",
         )
 
-    query = (
-        "MERGE (c:Counter {name: 'item'}) "
-        "ON CREATE SET c.value = 0 "
-        "SET c.value = c.value + 1 "
-        "WITH c.value AS nextId "
-        "CREATE (i:Item {"
-        "id: nextId, name: $name, description: $description, "
-        "kind: $kind, status: $status, labels: $labels, aliases: $aliases"
-        "}) "
-        "WITH i "
-        "CALL (i) { "
-        "UNWIND $connections AS connected_id "
-        "MATCH (target) WHERE (target:Item OR target:LineItem) AND target.id = connected_id "
-        "CREATE (i)-[:CONNECTED_TO]->(target) "
-        "RETURN count(*) AS connection_count "
-        "} "
-        "RETURN i.id AS id"
-    )
-    records = run_query(
-        driver,
-        query,
-        {
-            "name": payload.name,
-            "description": payload.description,
-            "kind": payload.kind.value,
-            "status": payload.status.value,
-            "labels": payload.labels,
-            "aliases": payload.aliases,
-            "connections": list(set(payload.connections)),
-        },
-    )
+    records = create(driver, payload.model_dump())
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create item")
+
     return {"id": records[0]["id"]}
 
 
@@ -167,43 +111,10 @@ def list_items(
                     detail=f"Invalid sort key: {key}. Valid values: name, kind",
                 )
 
-    where_clause = (
-        "WHERE ($name IS NULL OR toLower(i.name) CONTAINS toLower($name)) "
-        "AND ($alias IS NULL OR ANY(alias IN coalesce(i.aliases, []) "
-        "WHERE toLower(alias) CONTAINS toLower($alias))) "
-    )
-    parameters: dict = {"name": name, "alias": alias}
+    params = {"name": name, "alias": alias}
+    total = get_total_item_records(driver, params)
+    data = get_item_records(driver, params, sort=sort, page=page, per_page=per_page)
 
-    count_query = f"MATCH (i:Item) {where_clause} RETURN count(i) AS total"
-    total_records = run_query(driver, count_query, parameters)
-    total = total_records[0]["total"] if total_records else 0
-
-    sort_clauses = []
-    if sort:
-        for key in sort:
-            if key == "name":
-                sort_clauses.append("toLower(i.name)")
-            elif key == "kind":
-                sort_clauses.append("i.kind")
-    order_clause = f"ORDER BY {', '.join(sort_clauses)}" if sort_clauses else ""
-
-    skip = (page - 1) * per_page
-    data_query = (
-        f"MATCH (i:Item) {where_clause} RETURN i {order_clause} SKIP $skip LIMIT $limit"
-    )
-    records = run_query(
-        driver,
-        data_query,
-        {**parameters, "skip": skip, "limit": per_page},
-    )
-    data = [
-        ItemData(
-            id=record["i"]["id"],
-            name=record["i"]["name"],
-            description=record["i"].get("description"),
-        )
-        for record in records
-    ]
     return {"page": page, "per_page": per_page, "total": total, "data": data}
 
 
@@ -226,10 +137,13 @@ async def get_item(
     if redis_client:
         key = f"item:{item_id}"
         data = await get_with_lock(
-            redis_client, key, lambda: _retrieve_item(driver, item_id), logger
+            redis_client, key, lambda: get_item_record(driver, item_id), logger
         )
     else:
-        data = await _retrieve_item(driver, item_id)
+        data = await get_item_record(driver, item_id)
+
+    if not data:
+        raise HTTPException(status_code=404, detail="Target item does not exist")
 
     # HTTP cache headers + ETag
     data_str = json.dumps(data, sort_keys=True)
@@ -252,7 +166,11 @@ async def get_item(
     )
 
 
-@router.patch("/{item_id}", status_code=204)
+@router.patch(
+    "/{item_id}",
+    status_code=204,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 async def patch_item(
     item_id: int,
     payload: ItemUpdate,
@@ -270,41 +188,11 @@ async def patch_item(
     """
     logger.info(f"Updating item with ID: {item_id}")
 
-    if payload.name and exists_any_name(driver, payload.name, exclude_id=item_id):
-        raise HTTPException(
-            status_code=409, detail="An item with the same name already exists"
-        )
-
-    update_clauses: list[str] = []
-    parameters: dict = {"id": item_id}
-    if payload.name is not None:
-        update_clauses.append("i.name = $name")
-        parameters["name"] = payload.name
-    if payload.description is not None:
-        update_clauses.append("i.description = $description")
-        parameters["description"] = payload.description
-    if payload.status is not None:
-        update_clauses.append("i.status = $status")
-        parameters["status"] = payload.status.value
-    if payload.labels is not None:
-        update_clauses.append("i.labels = $labels")
-        parameters["labels"] = payload.labels
-    if payload.aliases is not None:
-        update_clauses.append("i.aliases = $aliases")
-        parameters["aliases"] = payload.aliases
-
-    if not update_clauses:
+    data = payload.model_dump(exclude_none=True)
+    if not data:
         return None
 
-    records = run_query(
-        driver,
-        (
-            f"MATCH (i:Item {{id: $id}}) "
-            f"SET {', '.join(update_clauses)} "
-            "RETURN i.id AS id"
-        ),
-        parameters,
-    )
+    records = update_item_record(driver, data, item_id)
     if not records:
         raise HTTPException(status_code=404, detail="Target item does not exist")
 
@@ -334,33 +222,18 @@ async def delete_item(
     """
     logger.info(f"Deleting item with ID: {item_id}, force: {force}")
 
-    records = run_query(
-        driver,
-        (
-            "MATCH (i:Item {id: $id}) "
-            "OPTIONAL MATCH (i)-[rel:CONNECTED_TO]->() "
-            "RETURN i.id AS id, count(rel) AS linked_count"
-        ),
-        {"id": item_id},
-    )
-    if not records or records[0]["id"] is None:
+    records = get_item_relationships(driver, item_id)
+    if not records:
         return None
 
     linked_count = records[0]["linked_count"]
     if linked_count and not force:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Can't delete an item with connected items; "
-                "set force to true to override"
-            ),
+            detail="Can't delete an item with connected items; set force to true to override",
         )
 
-    run_query(
-        driver,
-        "MATCH (i:Item {id: $id}) DETACH DELETE i",
-        {"id": item_id},
-    )
+    delete_item_record(driver, item_id)
 
     # Invalidate redis cache
     if redis_client:

@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
-from app.schemas.common import NonNestedDict
+from app.schemas.common import ListIntNoDuplicates, NonNestedDict
 
 
 class ItemConnection(BaseModel):
@@ -28,7 +28,7 @@ class ItemConnectionsDelete(BaseModel):
     """Request model for disconnecting items from a non-line item."""
 
     items: Annotated[
-        list[int],
+        ListIntNoDuplicates,
         Field(..., min_length=1, description="List of item IDs to disconnect"),
     ]
 

@@ -3,106 +3,58 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated, Any
+from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
-from app.db import exists_any_name, run_query
-from app.dependencies import get_driver, get_logger, get_redis_client
+from app.dependencies import (
+    check_name_uniqueness,
+    get_driver,
+    get_logger,
+    get_redis_client,
+)
 from app.redis import get_with_lock, invalidate_redis_cache
-from app.schemas import (
+from app.schemas.line_items import (
     LINE_ITEM_KIND_LOOKUP,
-    LineItemAdjacent,
     LineItemCreate,
     LineItemCreateResponse,
-    LineItemData,
-    LineItemDetailData,
     LineItemDetailResponse,
     LineItemListResponse,
     LineItemStatus,
     LineItemUpdate,
 )
-
-router = APIRouter(
-    prefix="/api/v1/beam-lines/{beam_id}/line-items", tags=["line-items"]
+from app.cruds.line_items import (
+    create,
+    delete_line_item_record,
+    get_line_item_record,
+    get_line_item_records,
+    get_line_item_relationships,
+    get_total_line_item_records,
+    has_duplicate_adjacent_index,
+    adj_and_conn_items_exist,
+    beam_line_exists,
+    update_line_item_record,
 )
 
 
-def _line_item_ids_exist(driver: Driver, ids: list[int]) -> bool:
-    """Return True if every distinct ID in *ids* belongs to an existing LineItem node."""
-    distinct_ids = list(set(ids))
-    if not distinct_ids:
-        return True
-    query = (
-        "MATCH (li:LineItem) "
-        "WHERE li.id IN $ids "
-        "RETURN count(DISTINCT li.id) = size($ids) AS all_exist"
-    )
-    records = run_query(driver, query, {"ids": distinct_ids})
-    return bool(records and records[0]["all_exist"])
+def check_beam_line_exists(beam_id: int, driver: Driver = Depends(get_driver)):
+    if not beam_line_exists(driver, beam_id):
+        raise HTTPException(status_code=404, detail="Beam line does not exist")
 
 
-def _has_duplicate_adjacent_index(payload: LineItemCreate) -> bool:
-    """Return True if *payload* contains two adjacents with the same (position, index) key."""
-    return _has_duplicate_adjacent_index_in_items(payload.adjacents)
+router = APIRouter(
+    prefix="/api/v1/beam-lines/{beam_id}/line-items",
+    tags=["line-items"],
+    dependencies=[Depends(check_beam_line_exists)],
+)
 
 
-def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> bool:
-    """Return True if *items* contains two entries sharing the same (position, index) pair."""
-    seen: set[tuple[str, int]] = set()
-    for adjacent in items:
-        if adjacent.index is None:
-            continue
-        key = (adjacent.position.value, adjacent.index)
-        if key in seen:
-            return True
-        seen.add(key)
-    return False
-
-
-def _beam_line_exists(driver: Driver, beam_id: int) -> bool:
-    """Return True if a BeamLine node with *beam_id* exists in the database."""
-    records = run_query(
-        driver,
-        "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id",
-        {"id": beam_id},
-    )
-    return bool(records)
-
-
-async def _retrieve_line_item(
-    driver: Driver, beam_id: int, item_id: int
-) -> dict[str, Any]:
-    query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
-        "RETURN li"
-    )
-    records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})
-    if not records:
-        raise HTTPException(
-            status_code=404,
-            detail="Beam line or target item does not exist",
-        )
-
-    item = records[0]["li"]
-    base_url = f"/api/v1/beam-lines/{beam_id}/line-items/{item_id}"
-    links = {
-        "adjacents": f"{base_url}/adjacents",
-        "connections": f"{base_url}/connections",
-    }
-    data = LineItemDetailData(
-        id=item["id"],
-        name=item["name"],
-        description=item.get("description"),
-        kind=item["kind"],
-        status=item["status"],
-        labels=item.get("labels", []),
-        aliases=item.get("aliases", []),
-    )
-    return {"links": links, "data": data.model_dump()}
-
-
-@router.post("", status_code=201, response_model=LineItemCreateResponse)
+@router.post(
+    "",
+    status_code=201,
+    response_model=LineItemCreateResponse,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 def create_line_item(
     beam_id: int,
     payload: LineItemCreate,
@@ -132,92 +84,24 @@ def create_line_item(
         {"id": 12}
     """
     logger.info(f"Creating line item with name: {payload.name} for beam line {beam_id}")
-    beam_records = run_query(
-        driver,
-        "MATCH (b:BeamLine {id: $id}) RETURN b.id AS id",
-        {"id": beam_id},
-    )
-    if not beam_records:
-        raise HTTPException(status_code=404, detail="Beam line does not exist")
 
-    if exists_any_name(driver, payload.name):
-        raise HTTPException(
-            status_code=409,
-            detail="Item with this name already exists",
-        )
-
-    if _has_duplicate_adjacent_index(payload):
+    if has_duplicate_adjacent_index([i.model_dump() for i in payload.adjacents]):
         raise HTTPException(
             status_code=400,
             detail="Adjacent item with the same index already exists",
         )
 
     adjacent_ids = [adjacent.id for adjacent in payload.adjacents]
-    connection_ids = payload.connections
-    if not _line_item_ids_exist(driver, adjacent_ids + connection_ids):
+    if not adj_and_conn_items_exist(driver, adjacent_ids + payload.connections):
         raise HTTPException(
             status_code=404,
             detail="Previous, next or connected item does not exist",
         )
 
-    adjacents = [
-        {
-            "id": adjacent.id,
-            "position": adjacent.position.value,
-            "index": adjacent.index,
-        }
-        for adjacent in payload.adjacents
-    ]
-    query = (
-        "MATCH (beam:BeamLine {id: $beam_id}) "
-        "MERGE (c:Counter {name: 'lineitem'}) "
-        "ON CREATE SET c.value = 0 "
-        "SET c.value = c.value + 1 "
-        "WITH beam, c.value AS nextId "
-        "CREATE (li:LineItem {"
-        "id: nextId, name: $name, description: $description, "
-        "kind: $kind, status: $status, labels: $labels, aliases: $aliases"
-        "}) "
-        "CREATE (beam)-[:HAS_LINE_ITEM]->(li) "
-        "WITH li "
-        "CALL (li) { "
-        "UNWIND $adjacents AS adjacent "
-        "MATCH (target:LineItem {id: adjacent.id}) "
-        "FOREACH (_ IN CASE WHEN adjacent.position IN ['Previous', 'Dual'] THEN [1] ELSE [] END | "
-        "  CREATE (li)-[:PREVIOUS {index: adjacent.index}]->(target) "
-        "  CREATE (target)-[:NEXT {index: adjacent.index}]->(li) "
-        ") "
-        "FOREACH (_ IN CASE WHEN adjacent.position IN ['Next', 'Dual'] THEN [1] ELSE [] END | "
-        "  CREATE (li)-[:NEXT {index: adjacent.index}]->(target) "
-        "  CREATE (target)-[:PREVIOUS {index: adjacent.index}]->(li) "
-        ") "
-        "RETURN count(*) AS adjacent_count "
-        "} "
-        "CALL (li) { "
-        "UNWIND $connections AS connected_id "
-        "MATCH (target:LineItem {id: connected_id}) "
-        "CREATE (li)-[:CONNECTED_TO]->(target) "
-        "RETURN count(*) AS connection_count "
-        "} "
-        "RETURN li.id AS id"
-    )
-    records = run_query(
-        driver,
-        query,
-        {
-            "beam_id": beam_id,
-            "name": payload.name,
-            "description": payload.description,
-            "kind": payload.kind.value,
-            "status": payload.status.value,
-            "labels": payload.labels,
-            "aliases": payload.aliases,
-            "adjacents": adjacents,
-            "connections": list(set(connection_ids)),
-        },
-    )
+    records = create(driver, payload.model_dump(), beam_id)
     if not records:
         raise HTTPException(status_code=500, detail="Failed to create line item")
+
     return {"id": records[0]["id"]}
 
 
@@ -238,7 +122,7 @@ def list_line_items(
 
     :param beam_id: ID of the parent beam line.
     :param page: 1-based page number.
-    :param per_page: Number of results per page (1–100).
+    :param per_page: Number of results per page (1-100).
     :param sort: Optional sort keys; accepted values are ``"name"`` and ``"kind"``.
     :param name: Optional case-insensitive substring filter on the item name.
     :param kind: Optional case-insensitive kind filter (e.g. ``"diagnostic"``).
@@ -255,8 +139,6 @@ def list_line_items(
         f"name filter: {name}, kind filter: {kind}, "
         f"status: {status.value if status else None}"
     )
-    if not _beam_line_exists(driver, beam_id):
-        raise HTTPException(status_code=404, detail="Beam line does not exist")
 
     if sort:
         for key in sort:
@@ -273,59 +155,18 @@ def list_line_items(
                 detail=f"Invalid kind; must be one of: {allowed}",
             )
 
-    where_clause = (
-        "WHERE ($status IS NULL OR li.status = $status) "
-        "AND ($name IS NULL OR toLower(li.name) CONTAINS toLower($name)) "
-        "AND ($alias IS NULL OR ANY(alias IN coalesce(li.aliases, []) "
-        "WHERE toLower(alias) CONTAINS toLower($alias))) "
-        "AND ($kind IS NULL OR li.kind = $kind)"
-    )
-    parameters = {
+    params = {
         "beam_id": beam_id,
         "status": status.value if status else None,
         "name": name,
         "alias": alias,
         "kind": normalized_kind.value if normalized_kind else None,
     }
-    count_query = (
-        "MATCH (b:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem) "
-        f"{where_clause} "
-        "RETURN count(li) AS total"
+    total = get_total_line_item_records(driver, params)
+    data = get_line_item_records(
+        driver, params, sort=sort, page=page, per_page=per_page
     )
-    total_records = run_query(driver, count_query, parameters)
-    total = total_records[0]["total"] if total_records else 0
 
-    sort_clauses = []
-    if sort:
-        for key in sort:
-            if key == "name":
-                sort_clauses.append("toLower(li.name)")
-            elif key == "kind":
-                sort_clauses.append("li.kind")
-    order_clause = f"ORDER BY {', '.join(sort_clauses)}" if sort_clauses else ""
-    query = (
-        "MATCH (b:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem) "
-        f"{where_clause} "
-        f"RETURN li {order_clause} SKIP $skip LIMIT $limit"
-    )
-    skip = (page - 1) * per_page
-    records = run_query(
-        driver,
-        query,
-        {
-            **parameters,
-            "skip": skip,
-            "limit": per_page,
-        },
-    )
-    data = [
-        LineItemData(
-            id=record["li"]["id"],
-            name=record["li"]["name"],
-            description=record["li"].get("description"),
-        )
-        for record in records
-    ]
     return {"page": page, "per_page": per_page, "total": total, "data": data}
 
 
@@ -352,11 +193,16 @@ async def get_line_item(
         data = await get_with_lock(
             redis_client,
             key,
-            lambda: _retrieve_line_item(driver, beam_id, item_id),
+            lambda: get_line_item_record(driver, beam_id, item_id),
             logger,
         )
     else:
-        data = await _retrieve_line_item(driver, beam_id, item_id)
+        data = await get_line_item_record(driver, beam_id, item_id)
+
+    if not data:
+        raise HTTPException(
+            status_code=404, detail="Beam line or target item does not exist"
+        )
 
     # HTTP cache headers + ETag
     data_str = json.dumps(data, sort_keys=True)
@@ -380,7 +226,11 @@ async def get_line_item(
     )
 
 
-@router.patch("/{item_id}", status_code=204)
+@router.patch(
+    "/{item_id}",
+    status_code=204,
+    dependencies=[Depends(check_name_uniqueness)],
+)
 async def patch_line_item(
     beam_id: int,
     item_id: int,
@@ -398,47 +248,15 @@ async def patch_line_item(
     already taken.
     """
     logger.info(f"Updating line item with ID: {item_id} for beam line {beam_id}")
-    if payload.name and exists_any_name(driver, payload.name, exclude_id=item_id):
-        raise HTTPException(
-            status_code=409,
-            detail="An item with the same name already exists",
-        )
 
-    update_clauses: list[str] = []
-    parameters: dict[str, object] = {"beam_id": beam_id, "id": item_id}
-    if payload.name is not None:
-        update_clauses.append("li.name = $name")
-        parameters["name"] = payload.name
-    if payload.description is not None:
-        update_clauses.append("li.description = $description")
-        parameters["description"] = payload.description
-    if payload.status is not None:
-        update_clauses.append("li.status = $status")
-        parameters["status"] = payload.status.value
-    if payload.kind is not None:
-        update_clauses.append("li.kind = $kind")
-        parameters["kind"] = payload.kind.value
-    if payload.labels is not None:
-        update_clauses.append("li.labels = $labels")
-        parameters["labels"] = payload.labels
-    if payload.aliases is not None:
-        update_clauses.append("li.aliases = $aliases")
-        parameters["aliases"] = payload.aliases
-
-    if not update_clauses:
+    data = payload.model_dump(exclude_none=True)
+    if not data:
         return None
 
-    query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-        "(li:LineItem {id: $id}) "
-        f"SET {', '.join(update_clauses)} "
-        "RETURN li.id AS id"
-    )
-    records = run_query(driver, query, parameters)
+    records = update_line_item_record(driver, data, beam_id, item_id)
     if not records:
         raise HTTPException(
-            status_code=404,
-            detail="Beam line or target item does not exist",
+            status_code=404, detail="Beam line or target item does not exist"
         )
 
     # Invalidate redis cache
@@ -470,17 +288,8 @@ async def delete_line_item(
     logger.info(
         f"Deleting line item with ID: {item_id} for beam line {beam_id}, force: {force}"
     )
-    if not _beam_line_exists(driver, beam_id):
-        raise HTTPException(status_code=404, detail="Beam line does not exist")
 
-    query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
-        "OPTIONAL MATCH (li)-[outgoing]-(:LineItem) "
-        "WITH li, [rel IN collect(outgoing) "
-        "WHERE type(rel) IN ['PREVIOUS', 'NEXT', 'CONNECTED_TO']] AS links "
-        "RETURN li.id AS id, size(links) AS linked_count"
-    )
-    records = run_query(driver, query, {"beam_id": beam_id, "id": item_id})
+    records = get_line_item_relationships(driver, beam_id, item_id)
     if not records:
         return None
 
@@ -488,21 +297,10 @@ async def delete_line_item(
     if linked_count and not force:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Can't delete an item with a previous or next item; "
-                "set force to true to override"
-            ),
+            detail="Can't delete an item with a previous or next item; set force to true to override",
         )
 
-    run_query(
-        driver,
-        (
-            "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-            "(li:LineItem {id: $id}) "
-            "DETACH DELETE li"
-        ),
-        {"beam_id": beam_id, "id": item_id},
-    )
+    delete_line_item_record(driver, beam_id, item_id)
 
     # Invalidate redis cache
     if redis_client:

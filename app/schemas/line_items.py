@@ -1,7 +1,7 @@
 from enum import Enum, IntEnum
 from typing import Annotated
 from pydantic import BaseModel, Field, field_validator
-from app.schemas.common import NonEmptyStr
+from app.schemas.common import ListIntNoDuplicates, NonEmptyStr
 
 
 class LineItemKind(str, Enum):
@@ -60,8 +60,8 @@ class LineItemCreate(BaseModel):
         Field(default_factory=list),
     ]
     connections: Annotated[
-        list[int],
-        Field(default_factory=list),
+        ListIntNoDuplicates,
+        Field(default_factory=list, description="IDs of items to connect to"),
     ]
     labels: Annotated[
         list[str],
@@ -86,6 +86,12 @@ class LineItemCreate(BaseModel):
             allowed = ", ".join(item.value for item in LineItemKind)
             raise ValueError(f"kind must be one of: {allowed}")
         return normalized
+
+
+class LineItemCreateResponse(BaseModel):
+    """Response model for creating a new line item."""
+
+    id: Annotated[int, Field(..., description="Auto-generated item ID")]
 
 
 class LineItemUpdate(BaseModel):
@@ -115,12 +121,6 @@ class LineItemUpdate(BaseModel):
         list[str] | None,
         Field(None, description="Updated list of aliases"),
     ] = None
-
-
-class LineItemCreateResponse(BaseModel):
-    """Response model for creating a new line item."""
-
-    id: Annotated[int, Field(..., description="Auto-generated item ID")]
 
 
 class LineItemData(BaseModel):

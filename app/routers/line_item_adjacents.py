@@ -2,13 +2,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from neo4j import Driver
 from typing import Annotated
 import logging
+from app.cruds.line_item_adjacents import (
+    disconnect_adjacents,
+    get_line_item_adjacent_relationships,
+    get_total_line_item_adjacent_relationships,
+    has_duplicate_adjacent_index_in_items,
+    has_duplicate_adjacent_items,
+)
+from app.cruds.line_item_connections import beam_line_and_line_item_exist
 from app.db import run_query
 from app.dependencies import get_driver, get_logger
-from app.schemas import (
+from app.schemas.line_item_adjacents import (
     ADJ_POS_LOOKUP,
     AdjacentPosition,
-    LineItemAdjacent,
-    LineItemAdjacentData,
     LineItemAdjacentPatch,
     LineItemAdjacentsDelete,
     LineItemAdjacentsListResponse,
@@ -16,36 +22,12 @@ from app.schemas import (
 )
 
 router = APIRouter(
-    prefix="/api/v1/beam-lines/{beam_id}/line-items",
+    prefix="/api/v1/beam-lines/{beam_id}/line-items/{item_id}/adjacents",
     tags=["line-item-adjacents"],
 )
 
 
-def _has_duplicate_adjacent_items(items: list[LineItemAdjacent]) -> bool:
-    """Return True if *items* contains two entries with the same (id, position) pair."""
-    seen: set[tuple[int, str]] = set()
-    for adjacent in items:
-        key = (adjacent.id, adjacent.position.value)
-        if key in seen:
-            return True
-        seen.add(key)
-    return False
-
-
-def _has_duplicate_adjacent_index_in_items(items: list[LineItemAdjacent]) -> bool:
-    """Return True if *items* contains two entries sharing the same (position, index) pair."""
-    seen: set[tuple[str, int]] = set()
-    for adjacent in items:
-        if adjacent.index is None:
-            continue
-        key = (adjacent.position.value, adjacent.index)
-        if key in seen:
-            return True
-        seen.add(key)
-    return False
-
-
-@router.get("/{item_id}/adjacents", response_model=LineItemAdjacentsListResponse)
+@router.get("", response_model=LineItemAdjacentsListResponse)
 def list_line_item_adjacents(
     beam_id: int,
     item_id: int,
@@ -76,13 +58,7 @@ def list_line_item_adjacents(
         f"page: {page}, per_page: {per_page}, sort: {sort}, position: {position}"
     )
 
-    existence_records = run_query(
-        driver,
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
-        "RETURN li.id AS id",
-        {"beam_id": beam_id, "id": item_id},
-    )
-    if not existence_records:
+    if not beam_line_and_line_item_exist(driver, beam_id, item_id):
         raise HTTPException(
             status_code=404,
             detail="Beam line or current item does not exist",
@@ -106,57 +82,26 @@ def list_line_item_adjacents(
                 detail=f"Invalid position; must be one of: {allowed}",
             )
 
-    where_position = "WHERE ($position IS NULL OR rel_type = $position) "
-    base_params: dict = {
-        "beam_id": beam_id,
-        "id": item_id,
-        "position": normalized_position.value if normalized_position else None,
-    }
-
-    count_query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-        "(current:LineItem {id: $id})-[rel:PREVIOUS|NEXT]->(adj:LineItem) "
-        "WITH adj, "
-        "  CASE type(rel) WHEN 'PREVIOUS' THEN 'Previous' ELSE 'Next' END AS rel_type, "
-        "  rel.index AS index "
-        f"{where_position}"
-        "RETURN count(adj) AS total"
-    )
-    total_records = run_query(driver, count_query, base_params)
-    total = total_records[0]["total"] if total_records else 0
-
-    order_clause = "ORDER BY rel_type" if sort and "position" in sort else ""
-    data_query = (
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-        "(current:LineItem {id: $id})-[rel:PREVIOUS|NEXT]->(adj:LineItem) "
-        "WITH adj, "
-        "  CASE type(rel) WHEN 'PREVIOUS' THEN 'Previous' ELSE 'Next' END AS rel_type, "
-        "  rel.index AS index "
-        f"{where_position}"
-        f"RETURN adj, rel_type AS position, index "
-        f"{order_clause} SKIP $skip LIMIT $limit"
-    )
-    skip = (page - 1) * per_page
-    records = run_query(
+    total = get_total_line_item_adjacent_relationships(
         driver,
-        data_query,
-        {**base_params, "skip": skip, "limit": per_page},
+        beam_id,
+        item_id,
+        normalized_position.value if normalized_position else None,
     )
-    data = [
-        LineItemAdjacentData(
-            id=record["adj"]["id"],
-            name=record["adj"]["name"],
-            description=record["adj"].get("description"),
-            position=record["position"],
-            index=record["index"],
-            link=f"/api/v1/beam-lines/{beam_id}/line-items/{record['adj']['id']}",
-        )
-        for record in records
-    ]
+    data = get_line_item_adjacent_relationships(
+        driver,
+        beam_id,
+        item_id,
+        normalized_position.value if normalized_position else None,
+        sort=sort,
+        page=page,
+        per_page=per_page,
+    )
+
     return {"page": page, "per_page": per_page, "total": total, "data": data}
 
 
-@router.put("/{item_id}/adjacents", status_code=201)
+@router.put("", status_code=201)
 def put_line_item_adjacents(
     beam_id: int,
     item_id: int,
@@ -167,8 +112,9 @@ def put_line_item_adjacents(
 ):
     """Add one or multiple adjacent line items to the current one."""
     logger.info(f"Adding adjacents to line item {item_id} for beam line {beam_id}")
-    if _has_duplicate_adjacent_items(payload.items) or (
-        _has_duplicate_adjacent_index_in_items(payload.items)
+    items = [i.model_dump() for i in payload.items]
+    if has_duplicate_adjacent_items(items) or (
+        has_duplicate_adjacent_index_in_items(items)
     ):
         raise HTTPException(
             status_code=400,
@@ -185,8 +131,7 @@ def put_line_item_adjacents(
         )
     target_ids = [item.id for item in payload.items]
     query = (
-        "MATCH (beam:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-        "(current:LineItem {id: $id}) "
+        "MATCH (beam:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(current:LineItem {id: $id}) "
         "WITH beam, current "
         "MATCH (beam)-[:HAS_LINE_ITEM]->(target:LineItem) "
         "WHERE target.id IN $target_ids "
@@ -265,7 +210,7 @@ def put_line_item_adjacents(
     return None
 
 
-@router.delete("/{item_id}/adjacents", status_code=204)
+@router.delete("", status_code=204)
 def delete_line_item_adjacents(
     beam_id: int,
     item_id: int,
@@ -283,36 +228,18 @@ def delete_line_item_adjacents(
     if len(payload.items) != len(set(payload.items)):
         raise HTTPException(status_code=400, detail="Duplicated items in the list")
 
-    existence_records = run_query(
-        driver,
-        "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->(li:LineItem {id: $id}) "
-        "RETURN li.id AS id",
-        {"beam_id": beam_id, "id": item_id},
-    )
-    if not existence_records:
+    if not beam_line_and_line_item_exist(driver, beam_id, item_id):
         raise HTTPException(
             status_code=404,
             detail="Beam line or current item does not exist",
         )
 
-    run_query(
-        driver,
-        (
-            "MATCH (:BeamLine {id: $beam_id})-[:HAS_LINE_ITEM]->"
-            "(current:LineItem {id: $id}) "
-            "UNWIND $target_ids AS target_id "
-            "MATCH (target:LineItem {id: target_id}) "
-            "OPTIONAL MATCH (current)-[r1:PREVIOUS|NEXT]->(target) "
-            "OPTIONAL MATCH (target)-[r2:PREVIOUS|NEXT]->(current) "
-            "FOREACH (_ IN CASE WHEN r1 IS NOT NULL THEN [1] ELSE [] END | DELETE r1) "
-            "FOREACH (_ IN CASE WHEN r2 IS NOT NULL THEN [1] ELSE [] END | DELETE r2)"
-        ),
-        {"beam_id": beam_id, "id": item_id, "target_ids": payload.items},
-    )
+    disconnect_adjacents(driver, beam_id, item_id, payload.items)
+
     return None
 
 
-@router.patch("/{item_id}/adjacents/{adj_id}", status_code=204)
+@router.patch("/{adj_id}", status_code=204)
 def patch_line_item_adjacent(
     beam_id: int,
     item_id: int,

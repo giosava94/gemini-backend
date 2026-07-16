@@ -5,6 +5,11 @@ import logging
 
 import redis.asyncio as redis
 
+from app.db import exists_any_name
+from app.schemas.beam_lines import BeamLineCreate, BeamLineUpdate
+from app.schemas.items import ItemCreate, ItemUpdate
+from app.schemas.line_items import LineItemCreate, LineItemUpdate
+
 
 def get_current_token(
     authorization: Annotated[str | None, Header(None)] = None,
@@ -64,3 +69,18 @@ def get_redis_client(request: Request) -> redis.Redis | None:
     if not hasattr(request.app, "redis_client"):
         raise RuntimeError("Redis client is not initialized")
     return request.app.redis_client
+
+
+def check_name_uniqueness(
+    payload: BeamLineCreate
+    | LineItemCreate
+    | ItemCreate
+    | BeamLineUpdate
+    | LineItemUpdate
+    | ItemUpdate,
+    driver: Driver = Depends(get_driver),
+) -> None:
+    if payload.name and exists_any_name(driver, payload.name):
+        raise HTTPException(
+            status_code=409, detail="Item with this name already exists"
+        )

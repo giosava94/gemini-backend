@@ -20,7 +20,7 @@ from app.routers.line_item_adjacents import router as line_item_adjacents_router
 from app.routers.line_item_connections import router as line_item_connections_router
 from app.routers.items import router as item_router
 from app.routers.item_connections import router as item_connections_router
-from app.schemas import HealthResponse, StatusEnum
+from app.schemas.common import HealthResponse, StatusEnum
 from datetime import datetime, timezone
 
 
@@ -76,7 +76,7 @@ app.include_router(item_connections_router)
     "/api/v1/health",
     response_model=HealthResponse,
     summary="Get service's health status",
-    tags=["health"],
+    tags=["system"],
 )
 def get_health(request: Request):
     """Return the service health status.
@@ -131,7 +131,10 @@ def get_health(request: Request):
     return resp
 
 
-@app.delete("api/v1/cache/pattern/{pattern}")
+@app.delete(
+    "api/v1/cache/pattern/{pattern}",
+    tags=["system"],
+)
 async def clear_cache_pattern(
     pattern: str,
     redis_client: redis.Redis | None = Depends(get_redis_client),

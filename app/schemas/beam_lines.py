@@ -13,6 +13,12 @@ class BeamLineCreate(BaseModel):
     ] = None
 
 
+class BeamLineCreateResponse(BaseModel):
+    """Response model for creating a new beam line."""
+
+    id: Annotated[int, Field(..., description="Auto-generated item ID")]
+
+
 class BeamLineUpdate(BaseModel):
     """Request model for updating a beam line."""
 
@@ -37,7 +43,23 @@ class BeamLineData(BaseModel):
     ] = None
 
 
-class LinksModel(BaseModel):
+class BeamLineListResponse(BaseModel):
+    """Response model for listing beam lines with pagination."""
+
+    page: Annotated[int, Field(..., description="Current page number")]
+    per_page: Annotated[int, Field(..., description="Items per page")]
+    total: Annotated[int, Field(..., description="Total number of items")]
+    data: Annotated[
+        list[BeamLineData],
+        Field(..., description="List of beam lines"),
+    ]
+
+
+class BeamLineDetailData(BeamLineData):
+    """Beam line detail data model."""
+
+
+class BeamLineLinksModel(BaseModel):
     """Links model for related beam line resources."""
 
     line_items: Annotated[
@@ -49,17 +71,7 @@ class LinksModel(BaseModel):
 class BeamLineDetailResponse(BaseModel):
     """Response model for retrieving a specific beam line with links."""
 
-    links: Annotated[LinksModel, Field(..., description="Related resource links")]
-    data: Annotated[BeamLineData, Field(..., description="Beam line details")]
-
-
-class BeamLineListResponse(BaseModel):
-    """Response model for listing beam lines with pagination."""
-
-    page: Annotated[int, Field(..., description="Current page number")]
-    per_page: Annotated[int, Field(..., description="Items per page")]
-    total: Annotated[int, Field(..., description="Total number of items")]
-    data: Annotated[
-        list[BeamLineData],
-        Field(..., description="List of beam lines"),
+    links: Annotated[
+        BeamLineLinksModel, Field(..., description="Related resource links")
     ]
+    data: Annotated[BeamLineData, Field(..., description="Beam line details")]
