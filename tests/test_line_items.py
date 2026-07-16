@@ -6,7 +6,6 @@ are patched so no real Neo4j or Redis instance is required.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 BASE = "/api/v1/beam-lines/1/line-items"
 
@@ -50,6 +49,7 @@ class TestCreateLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.has_duplicate_adjacent_index",
                 return_value=False,
@@ -66,6 +66,7 @@ class TestCreateLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.has_duplicate_adjacent_index",
                 return_value=False,
@@ -108,6 +109,7 @@ class TestCreateLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.has_duplicate_adjacent_index", return_value=True
             ),
@@ -121,6 +123,7 @@ class TestCreateLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.has_duplicate_adjacent_index",
                 return_value=False,
@@ -137,6 +140,7 @@ class TestCreateLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.has_duplicate_adjacent_index",
                 return_value=False,
@@ -147,14 +151,25 @@ class TestCreateLineItem:
             r = client.post(BASE, json=VALID_PAYLOAD, headers=admin_headers)
         assert r.status_code == 500
 
-    def test_create_invalid_kind(self, client, admin_headers):
-        """422 is returned when an unsupported kind value is supplied."""
-        with patch("app.routers.line_items.beam_line_exists", return_value=True):
+    def test_create_unknown_kind_rejected(self, client, admin_headers):
+        """422 is returned when the kind does not exist in the DB vocabulary."""
+        with (
+            patch("app.routers.line_items.beam_line_exists", return_value=True),
+            patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=False),
+        ):
             r = client.post(
                 BASE,
-                json={**VALID_PAYLOAD, "kind": "InvalidKind"},
+                json={**VALID_PAYLOAD, "kind": "UnknownKind"},
                 headers=admin_headers,
             )
+        assert r.status_code == 422
+
+    def test_create_missing_kind_rejected(self, client, admin_headers):
+        """422 is returned when the required kind field is absent."""
+        payload = {k: v for k, v in VALID_PAYLOAD.items() if k != "kind"}
+        with patch("app.routers.line_items.beam_line_exists", return_value=True):
+            r = client.post(BASE, json=payload, headers=admin_headers)
         assert r.status_code == 422
 
     def test_create_empty_name_rejected(self, client, admin_headers):
@@ -178,6 +193,7 @@ class TestCreateLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.has_duplicate_adjacent_index",
                 return_value=False,
@@ -200,6 +216,7 @@ class TestCreateLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.has_duplicate_adjacent_index",
                 return_value=False,
@@ -221,6 +238,7 @@ class TestCreateLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.has_duplicate_adjacent_index",
                 return_value=False,
@@ -232,37 +250,6 @@ class TestCreateLineItem:
                 BASE,
                 json={**VALID_PAYLOAD, "connections": [1, 2]},
                 headers=admin_headers,
-            )
-        assert r.status_code == 201
-
-    @pytest.mark.parametrize(
-        "kind",
-        [
-            "Diagnostic",
-            "ES Triplet",
-            "ES Steerer",
-            "ES Dipole",
-            "ES Quadrupole",
-            "MG Dipole",
-            "MG Solenoid",
-            "Ion Source",
-            "Wien Filter",
-        ],
-    )
-    def test_create_all_valid_kinds(self, client, admin_headers, kind):
-        """Every valid kind value is accepted with 201."""
-        with (
-            patch("app.routers.line_items.beam_line_exists", return_value=True),
-            patch("app.dependencies.exists_any_name", return_value=False),
-            patch(
-                "app.routers.line_items.has_duplicate_adjacent_index",
-                return_value=False,
-            ),
-            patch("app.routers.line_items.adj_and_conn_items_exist", return_value=True),
-            patch("app.routers.line_items.create", return_value=[{"id": 1}]),
-        ):
-            r = client.post(
-                BASE, json={**VALID_PAYLOAD, "kind": kind}, headers=admin_headers
             )
         assert r.status_code == 201
 
@@ -353,10 +340,10 @@ class TestListLineItems:
         assert r.status_code == 200
 
     def test_list_invalid_kind_filter(self, client):
-        """An unrecognised kind value triggers a 422."""
+        """An unrecognised kind value returns an empty list."""
         with patch("app.routers.line_items.beam_line_exists", return_value=True):
             r = client.get(f"{BASE}?kind=NotAKind")
-        assert r.status_code == 422
+        assert r.status_code == 200
 
     def test_list_status_filter(self, client):
         """Status filter is accepted and returns 200."""
@@ -601,6 +588,7 @@ class TestPatchLineItem:
         with (
             patch("app.routers.line_items.beam_line_exists", return_value=True),
             patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=True),
             patch(
                 "app.routers.line_items.update_line_item_record",
                 return_value=[{"id": 10}],
@@ -649,6 +637,22 @@ class TestPatchLineItem:
         """422 is returned when name is an empty string."""
         with patch("app.routers.line_items.beam_line_exists", return_value=True):
             r = client.patch(f"{BASE}/10", json={"name": ""}, headers=admin_headers)
+        assert r.status_code == 422
+
+    def test_patch_unknown_kind_rejected(self, client, admin_headers):
+        """204 is returned when only kind is updated."""
+        with (
+            patch("app.routers.line_items.beam_line_exists", return_value=True),
+            patch("app.dependencies.exists_any_name", return_value=False),
+            patch("app.routers.line_items.line_item_kind_exists", return_value=False),
+            patch(
+                "app.routers.line_items.update_line_item_record",
+                return_value=[{"id": 10}],
+            ),
+        ):
+            r = client.patch(
+                f"{BASE}/10", json={"kind": "NotAKind"}, headers=admin_headers
+            )
         assert r.status_code == 422
 
     def test_patch_description(self, client, admin_headers):
