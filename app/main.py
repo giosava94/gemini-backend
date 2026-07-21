@@ -16,9 +16,11 @@ from app.dependencies import get_logger, get_redis_client
 from app.redis import close_redis_connection, create_redis_client
 from app.routers.beam_lines import router as beam_line_router
 from app.routers.line_items import router as line_item_router
+from app.routers.line_item_kinds import router as line_item_kinds_router
 from app.routers.line_item_adjacents import router as line_item_adjacents_router
 from app.routers.line_item_connections import router as line_item_connections_router
 from app.routers.items import router as item_router
+from app.routers.item_kinds import router as item_kinds_router
 from app.routers.item_connections import router as item_connections_router
 from app.schemas.common import HealthResponse, StatusEnum
 from datetime import datetime, timezone
@@ -66,9 +68,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Gemini Backend", version="0.1.0", lifespan=lifespan)
 app.include_router(beam_line_router)
 app.include_router(line_item_router)
+app.include_router(line_item_kinds_router)
 app.include_router(line_item_adjacents_router)
 app.include_router(line_item_connections_router)
 app.include_router(item_router)
+app.include_router(item_kinds_router)
 app.include_router(item_connections_router)
 
 

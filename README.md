@@ -72,6 +72,14 @@ All endpoints are prefixed with `/api/v1`.
 | PATCH  | `/api/v1/beam-lines/{beam_id}/line-items/{id}` | Update a line item                      |
 | DELETE | `/api/v1/beam-lines/{beam_id}/line-items/{id}` | Delete a line item (`?force=true`)      |
 
+### Line Item Kinds
+
+| Method | Path                             | Description                                      |
+| ------ | -------------------------------- | ------------------------------------------------ |
+| POST   | `/api/v1/line-item-kinds`        | Register a line-item kind                        |
+| GET    | `/api/v1/line-item-kinds`        | List the available line-item kinds               |
+| DELETE | `/api/v1/line-item-kinds/{name}` | Delete a line-item kind when it is no longer used |
+
 ### Line Item Adjacents
 
 | Method | Path                                                              | Description                                       |
@@ -108,11 +116,21 @@ All endpoints are prefixed with `/api/v1`.
 | DELETE | `/api/v1/items/{id}/connections`           | Remove connections                                                   |
 | GET    | `/api/v1/items/{id}/line-item-connections` | List beam line items connected to this item                          |
 
+### Item Kinds
+
+| Method | Path                        | Description                                   |
+| ------ | --------------------------- | --------------------------------------------- |
+| POST   | `/api/v1/item-kinds`        | Register an item kind                         |
+| GET    | `/api/v1/item-kinds`        | List the available item kinds                 |
+| DELETE | `/api/v1/item-kinds/{name}` | Delete an item kind when it is no longer used |
+
 ## Data Models
 
 ### LineItem kinds
 
-`Diagnostic`, `ES Triplet`, `ES Steerer`, `ES Dipole`, `ES Quadrupole`, `ES Multipole`, `MG Triplet`, `MG Steerer`, `MG Dipole`, `MG Solenoid`, `Valve Gate`, `High Energy Buncher`, `Low Energy Buncher`, `Radiofrequency Quadrupole`, `Cryostat`, `Charge Breeder`, `Beam Cooler`, `Tape Station`, `Ion Source`, `Target Ion Source`, `Wien Filter`
+Line-item kinds are stored as `LineItemKind` nodes in Neo4j and managed at
+runtime through `/api/v1/line-item-kinds`. Creating or updating a line item
+with an unregistered kind returns `422 Unprocessable Entity`.
 
 ### LineItem statuses
 
@@ -120,7 +138,14 @@ All endpoints are prefixed with `/api/v1`.
 
 ### Item kinds
 
-`MTBX`, `Rack`, `BACCO`, `Primary_Pump`, `Turbomolecular_Pump`, `Flange`, `Line`, `Box`
+Item kinds are stored as `ItemKind` nodes in Neo4j and managed at runtime
+through `/api/v1/item-kinds`. Creating or updating an item with an
+unregistered kind returns `422 Unprocessable Entity`.
+
+For both kind resources, names are non-empty, unique, and case-sensitive.
+Registering a duplicate name returns `409 Conflict`. Deleting a missing kind
+returns `204 No Content`; deleting a kind still used by an item or line item
+returns `409 Conflict`.
 
 ### Item statuses
 

@@ -1,12 +1,40 @@
+"""REST endpoints for LineItem resources.
+
+Line items are elements along a beam line (magnets, diagnostics, valves, …).
+They live under a parent ``BeamLine`` and can carry adjacency relationships
+(PREVIOUS / NEXT) and connections to non-line items.
+
+All routes are prefixed with ``/api/v1/beam-lines/{beam_id}/line-items`` and
+share a router-level dependency that verifies the parent beam line exists.
+
+Kind validation is performed against the ``LineItemKind`` nodes stored in
+Neo4j (see :mod:`app.cruds.line_item_kinds`) rather than against a hard-coded
+enum.  An unknown kind string is rejected with a ``422`` response.
+"""
+
 import hashlib
 import json
+import logging
+from typing import Annotated
 
+import redis.asyncio as redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from neo4j import Driver
-from typing import Annotated
-import logging
-import redis.asyncio as redis
+
 from app.config import get_settings
+from app.cruds.line_item_kinds import line_item_kind_exists
+from app.cruds.line_items import (
+    adj_and_conn_items_exist,
+    beam_line_exists,
+    create,
+    delete_line_item_record,
+    get_line_item_record,
+    get_line_item_records,
+    get_line_item_relationships,
+    get_total_line_item_records,
+    has_duplicate_adjacent_index,
+    update_line_item_record,
+)
 from app.dependencies import (
     check_name_uniqueness,
     get_driver,
@@ -15,7 +43,6 @@ from app.dependencies import (
 )
 from app.redis import get_with_lock, invalidate_redis_cache
 from app.schemas.line_items import (
-    LINE_ITEM_KIND_LOOKUP,
     LineItemCreate,
     LineItemCreateResponse,
     LineItemDetailResponse,
@@ -23,21 +50,15 @@ from app.schemas.line_items import (
     LineItemStatus,
     LineItemUpdate,
 )
-from app.cruds.line_items import (
-    create,
-    delete_line_item_record,
-    get_line_item_record,
-    get_line_item_records,
-    get_line_item_relationships,
-    get_total_line_item_records,
-    has_duplicate_adjacent_index,
-    adj_and_conn_items_exist,
-    beam_line_exists,
-    update_line_item_record,
-)
 
 
 def check_beam_line_exists(beam_id: int, driver: Driver = Depends(get_driver)):
+    """FastAPI dependency that raises ``404`` when the beam line does not exist.
+
+    :param beam_id: ID of the beam line extracted from the URL path.
+    :param driver: Injected Neo4j driver.
+    :raises HTTPException: 404 when no ``BeamLine`` node with *beam_id* exists.
+    """
     if not beam_line_exists(driver, beam_id):
         raise HTTPException(status_code=404, detail="Beam line does not exist")
 
@@ -64,16 +85,18 @@ def create_line_item(
 ):
     """Create a new line item under a beam line.
 
-    Raises ``404`` when the beam line does not exist.  Raises ``409`` when a
-    node with the same name already exists.  Raises ``400`` when the adjacents
-    list contains duplicate ``(position, index)`` pairs.  Raises ``404`` when
-    any adjacent or connection ID does not exist.
+    The ``kind`` field is validated against existing ``LineItemKind`` nodes in
+    the database.  Raises ``422`` when the kind is unknown.  Raises ``404``
+    when the beam line does not exist.  Raises ``409`` when a node with the
+    same name already exists.  Raises ``400`` when the adjacents list contains
+    duplicate ``(position, index)`` pairs.  Raises ``404`` when any adjacent
+    or connection ID does not exist.
 
     Example request body::
 
         {
             "name": "QD01",
-            "kind": "ES_Quadrupole",
+            "kind": "ES Quadrupole",
             "status": 0,
             "adjacents": [{"id": 5, "position": "Previous", "index": 0}],
             "connections": []
@@ -84,6 +107,16 @@ def create_line_item(
         {"id": 12}
     """
     logger.info(f"Creating line item with name: {payload.name} for beam line {beam_id}")
+
+    # Validate kind against the DB-managed vocabulary
+    if not line_item_kind_exists(driver, payload.kind):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown line item kind '{payload.kind}'. "
+                "Register it via POST /api/v1/line-item-kinds first."
+            ),
+        )
 
     if has_duplicate_adjacent_index([i.model_dump() for i in payload.adjacents]):
         raise HTTPException(
@@ -125,13 +158,14 @@ def list_line_items(
     :param per_page: Number of results per page (1-100).
     :param sort: Optional sort keys; accepted values are ``"name"`` and ``"kind"``.
     :param name: Optional case-insensitive substring filter on the item name.
-    :param kind: Optional case-insensitive kind filter (e.g. ``"diagnostic"``).
+    :param kind: Optional exact kind filter — matched case-sensitively against the
+        stored ``kind`` property.
     :param status: Optional status filter using :class:`LineItemStatus` values.
 
     Raises ``404`` when the beam line does not exist.  Raises ``422`` for
-    unsupported sort keys or unrecognised kind values.
+    unsupported sort keys.
 
-    Example: ``GET /api/v1/beam-lines/1/line-items?page=1&per_page=10&kind=diagnostic``
+    Example: ``GET /api/v1/beam-lines/1/line-items?page=1&per_page=10&kind=Diagnostic``
     """
     logger.info(
         "Listing line items - "
@@ -145,22 +179,12 @@ def list_line_items(
             if key not in ("name", "kind"):
                 raise HTTPException(status_code=422, detail=f"Invalid sort key: {key}")
 
-    normalized_kind = None
-    if kind is not None:
-        normalized_kind = LINE_ITEM_KIND_LOOKUP.get(kind.lower())
-        if normalized_kind is None:
-            allowed = ", ".join(item.value for item in LINE_ITEM_KIND_LOOKUP.values())
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid kind; must be one of: {allowed}",
-            )
-
     params = {
         "beam_id": beam_id,
         "status": status.value if status else None,
         "name": name,
         "alias": alias,
-        "kind": normalized_kind.value if normalized_kind else None,
+        "kind": kind,
     }
     total = get_total_line_item_records(driver, params)
     data = get_line_item_records(
@@ -183,7 +207,9 @@ async def get_line_item(
 
     Returns the item data along with ``links`` pointing to the adjacents and
     connections sub-resources.  Raises ``404`` when either the beam line or
-    the line item does not exist.
+    the line item does not exist.  Supports conditional GET via the ETag /
+    ``If-None-Match`` mechanism and populates HTTP cache headers when Redis is
+    available.
     """
     logger.info(f"Fetching line item with ID: {item_id} for beam line {beam_id}")
 
@@ -208,7 +234,6 @@ async def get_line_item(
     data_str = json.dumps(data, sort_keys=True)
     etag = f'"{hashlib.md5(data_str.encode()).hexdigest()}"'
 
-    # Check if client has current version
     if request.headers.get("if-none-match") == etag:
         logger.info(
             f"Browser's cached value for line item with ID: {item_id} for "
@@ -240,11 +265,13 @@ async def patch_line_item(
     redis_client: redis.Redis | None = Depends(get_redis_client),
     # _token: str = Depends(require_admin),
 ):
-    """Partially update a line item's name, description, and/or status.
+    """Partially update a line item's fields.
 
     Only the fields present in *payload* are changed; omitted fields are left
-    untouched.  Returns ``204 No Content`` on success.  Raises ``404`` when
-    the beam line or item does not exist, and ``409`` when the new name is
+    untouched.  When ``kind`` is included it is validated against the
+    ``LineItemKind`` vocabulary in the database; unknown values produce a
+    ``422`` response.  Returns ``204 No Content`` on success.  Raises ``404``
+    when the beam line or item does not exist, and ``409`` when the new name is
     already taken.
     """
     logger.info(f"Updating line item with ID: {item_id} for beam line {beam_id}")
@@ -252,6 +279,16 @@ async def patch_line_item(
     data = payload.model_dump(exclude_none=True)
     if not data:
         return None
+
+    # Validate kind when it is part of the update
+    if "kind" in data and not line_item_kind_exists(driver, data["kind"]):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown line item kind '{data['kind']}'. "
+                "Register it via POST /api/v1/line-item-kinds first."
+            ),
+        )
 
     records = update_line_item_record(driver, data, beam_id, item_id)
     if not records:

@@ -1,20 +1,9 @@
-from enum import Enum, IntEnum
+"""Schemas for items whose kind vocabulary is managed in Neo4j."""
+
+from enum import IntEnum
 from typing import Annotated
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from app.schemas.common import ListIntNoDuplicates, NonEmptyStr
-
-
-class ItemKind(str, Enum):
-    """Allowed non-line item kinds."""
-
-    MTBX = "MTBX"
-    RACK = "Rack"
-    BACCO = "BACCO"
-    PRIMARY_PUMP = "Primary_Pump"
-    TURBOMOLECULAR_PUMP = "Turbomolecular_Pump"
-    FLANGE = "Flange"
-    LINE = "Line"
-    BOX = "Box"
 
 
 class ItemStatus(IntEnum):
@@ -26,9 +15,6 @@ class ItemStatus(IntEnum):
     DISMITTED = 3
 
 
-ITEM_KIND_LOOKUP = {item.value.lower(): item for item in ItemKind}
-
-
 class ItemCreate(BaseModel):
     """Request model for creating a new non-line item."""
 
@@ -37,7 +23,10 @@ class ItemCreate(BaseModel):
         str | None,
         Field(None, description="Optional item description"),
     ] = None
-    kind: Annotated[ItemKind, Field(..., description="Item kind")]
+    kind: Annotated[
+        NonEmptyStr,
+        Field(..., description="Item kind - must match an existing ItemKind"),
+    ]
     status: Annotated[
         ItemStatus,
         Field(default=ItemStatus.ACTIVE, description="Item status"),
@@ -54,21 +43,6 @@ class ItemCreate(BaseModel):
         list[str],
         Field(default_factory=list, description="Optional list of aliases"),
     ]
-
-    @field_validator("kind", mode="before")
-    @classmethod
-    def validate_kind(cls, value: str | ItemKind) -> ItemKind:
-        """Normalise *value* to an :class:`ItemKind` member, case-insensitively."""
-        if isinstance(value, ItemKind):
-            return value
-        if not isinstance(value, str):
-            allowed = ", ".join(item.value for item in ItemKind)
-            raise ValueError(f"kind must be one of: {allowed}")
-        normalized = ITEM_KIND_LOOKUP.get(value.lower())
-        if normalized is None:
-            allowed = ", ".join(item.value for item in ItemKind)
-            raise ValueError(f"kind must be one of: {allowed}")
-        return normalized
 
 
 class ItemCreateResponse(BaseModel):
@@ -91,6 +65,10 @@ class ItemUpdate(BaseModel):
     status: Annotated[
         ItemStatus | None,
         Field(None, description="Updated item status"),
+    ] = None
+    kind: Annotated[
+        NonEmptyStr | None,
+        Field(None, description="Updated kind - must match an existing ItemKind"),
     ] = None
     labels: Annotated[
         list[str] | None,
@@ -128,7 +106,7 @@ class ItemListResponse(BaseModel):
 class ItemDetailData(ItemData):
     """Non-line item detail data model."""
 
-    kind: Annotated[ItemKind, Field(..., description="Item kind")]
+    kind: Annotated[str, Field(..., description="Item kind")]
     status: Annotated[ItemStatus, Field(..., description="Item status")]
     labels: Annotated[
         list[str],
