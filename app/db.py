@@ -52,6 +52,8 @@ def ensure_constraints(driver: Driver) -> None:
         "FOR (n:Item) REQUIRE n.name IS UNIQUE",
         "CREATE CONSTRAINT lineitemkind_name_unique IF NOT EXISTS "
         "FOR (n:LineItemKind) REQUIRE n.name IS UNIQUE",
+        "CREATE CONSTRAINT itemkind_name_unique IF NOT EXISTS "
+        "FOR (n:ItemKind) REQUIRE n.name IS UNIQUE",
     )
     with driver.session() as session:
         for query in queries:

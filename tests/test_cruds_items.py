@@ -434,6 +434,14 @@ class TestUpdateItemRecord:
             update_item_record(driver, {"status": 2}, item_id=1)
         assert "i.status" in mock_rq.call_args[0][1]
 
+    def test_query_includes_kind_set_clause(self):
+        """SET clause includes i.kind when kind is in payload."""
+        driver = _make_driver()
+        with patch("app.cruds.items.run_query", return_value=[]) as mock_rq:
+            update_item_record(driver, {"kind": "Custom"}, item_id=1)
+        assert "i.kind" in mock_rq.call_args[0][1]
+        assert mock_rq.call_args[0][2]["kind"] == "Custom"
+
     def test_query_includes_labels_set_clause(self):
         """SET clause includes i.labels when labels is in payload."""
         driver = _make_driver()

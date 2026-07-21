@@ -106,8 +106,8 @@ def delete_kind(
 ):
     """Delete a line item kind by its exact name.
 
-    Raises ``404`` when no ``LineItemKind`` node with *name* exists.
-    Raises ``409`` when the kind is still referenced by one or more
+    Returns ``204`` when no ``LineItemKind`` node with *name* exists, making
+    deletion idempotent. Raises ``409`` when the kind is still referenced by one or more
     ``LineItem`` nodes — remove or reassign those items before deleting the
     kind.
 
@@ -118,10 +118,7 @@ def delete_kind(
     logger.info(f"Deleting line item kind: {name}")
 
     if not line_item_kind_exists(driver, name):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Line item kind '{name}' does not exist",
-        )
+        return None
 
     if line_item_kind_in_use(driver, name):
         raise HTTPException(

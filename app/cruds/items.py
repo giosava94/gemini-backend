@@ -113,6 +113,8 @@ def update_item_record(driver: Driver, payload: dict[str, Any], item_id: int):
         update_clauses.append("i.description = $description")
     if payload.get("status") is not None:
         update_clauses.append("i.status = $status")
+    if payload.get("kind") is not None:
+        update_clauses.append("i.kind = $kind")
     if payload.get("labels") is not None:
         update_clauses.append("i.labels = $labels")
     if payload.get("aliases") is not None:

@@ -1,3 +1,5 @@
+"""REST endpoints for items with database-managed kind validation."""
+
 import hashlib
 import json
 
@@ -7,6 +9,7 @@ from typing import Annotated
 import logging
 import redis.asyncio as redis
 from app.config import get_settings
+from app.cruds.item_kinds import item_kind_exists
 from app.dependencies import (
     check_name_uniqueness,
     get_driver,
@@ -49,6 +52,7 @@ def create_item(
 ):
     """Create a new non-line item.
 
+    Raises ``422`` when ``kind`` is not registered as an ``ItemKind`` node.
     Raises ``409`` when a node with the same name already exists.  Raises
     ``404`` when any of the requested connection IDs do not exist.
 
@@ -66,6 +70,15 @@ def create_item(
         {"id": 42}
     """
     logger.info(f"Creating item with name: {payload.name}")
+
+    if not item_kind_exists(driver, payload.kind):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown item kind '{payload.kind}'. "
+                "Register it via POST /api/v1/item-kinds first."
+            ),
+        )
 
     if not conn_items_exist(driver, payload.connections):
         raise HTTPException(
@@ -179,18 +192,28 @@ async def patch_item(
     redis_client: redis.Redis | None = Depends(get_redis_client),
     # _token: str = Depends(require_admin),
 ):
-    """Partially update a non-line item's name, description, and/or status.
+    """Partially update a non-line item's fields.
 
     Only the fields present in *payload* are changed; omitted fields are left
-    untouched.  Returns ``204 No Content`` on success.  Raises ``404`` when
-    the item does not exist, and ``409`` when the requested name is already
-    taken by another node.
+    untouched.  A supplied ``kind`` must exist in the database-managed
+    ``ItemKind`` vocabulary.  Returns ``204 No Content`` on success.  Raises
+    ``404`` when the item does not exist, and ``409`` when the requested name
+    is already taken by another node.
     """
     logger.info(f"Updating item with ID: {item_id}")
 
     data = payload.model_dump(exclude_none=True)
     if not data:
         return None
+
+    if "kind" in data and not item_kind_exists(driver, data["kind"]):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown item kind '{data['kind']}'. "
+                "Register it via POST /api/v1/item-kinds first."
+            ),
+        )
 
     records = update_item_record(driver, data, item_id)
     if not records:

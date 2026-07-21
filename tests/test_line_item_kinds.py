@@ -157,12 +157,12 @@ class TestDeleteKind:
         assert r.status_code == 204
 
     def test_delete_not_found(self, client, admin_headers):
-        """404 is returned when the kind does not exist."""
+        """204 is returned when the kind does not exist."""
         with patch(
             "app.routers.line_item_kinds.line_item_kind_exists", return_value=False
         ):
             r = client.delete(f"{BASE}/Unknown", headers=admin_headers)
-        assert r.status_code == 404
+        assert r.status_code == 204
 
     def test_delete_conflict_kind_in_use(self, client, admin_headers):
         """409 is returned when the kind is still referenced by line items."""

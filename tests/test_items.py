@@ -18,6 +18,13 @@ VALID_PAYLOAD = {
 }
 
 
+@pytest.fixture(autouse=True)
+def registered_item_kind():
+    """Treat request kinds as registered unless a test overrides the lookup."""
+    with patch("app.routers.items.item_kind_exists", return_value=True):
+        yield
+
+
 def _make_item_node(
     iid, name, kind="Rack", status=0, desc=None, labels=None, aliases=None
 ):
@@ -109,12 +116,13 @@ class TestCreateItem:
         assert r.status_code == 500
 
     def test_create_invalid_kind(self, client, admin_headers):
-        """422 is returned when an unsupported kind value is supplied."""
-        r = client.post(
-            BASE,
-            json={**VALID_PAYLOAD, "kind": "Unknown"},
-            headers=admin_headers,
-        )
+        """422 is returned when the kind is absent from the database."""
+        with patch("app.routers.items.item_kind_exists", return_value=False):
+            r = client.post(
+                BASE,
+                json={**VALID_PAYLOAD, "kind": "Unknown"},
+                headers=admin_headers,
+            )
         assert r.status_code == 422
 
     def test_create_empty_name_rejected(self, client, admin_headers):
@@ -468,6 +476,24 @@ class TestPatchItem:
         ):
             r = client.patch(f"{BASE}/42", json={"status": 2}, headers=admin_headers)
         assert r.status_code == 204
+
+    def test_patch_kind(self, client, admin_headers):
+        """A registered kind can be assigned during a partial update."""
+        mock_update = MagicMock(return_value=[{"id": 42}])
+        with patch("app.routers.items.update_item_record", mock_update):
+            r = client.patch(
+                f"{BASE}/42", json={"kind": "Custom"}, headers=admin_headers
+            )
+        assert r.status_code == 204
+        assert mock_update.call_args[0][1]["kind"] == "Custom"
+
+    def test_patch_unknown_kind(self, client, admin_headers):
+        """An unregistered kind cannot be assigned during an update."""
+        with patch("app.routers.items.item_kind_exists", return_value=False):
+            r = client.patch(
+                f"{BASE}/42", json={"kind": "Unknown"}, headers=admin_headers
+            )
+        assert r.status_code == 422
 
     def test_patch_description(self, client, admin_headers):
         """204 is returned when only description is updated."""
